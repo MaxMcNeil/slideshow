@@ -1,9 +1,0 @@
-# A installer avec: crontab -e   (sur TON serveur, pas ici)
-# Tous les jours a 9h00, heure de Paris (adapte le fuseau de ton serveur) :
-# 1) recupere les news du jour
-# 2) regenere la video (nombre d'images + textes a jour)
-# 3) redemarre le stream pour qu'il diffuse la nouvelle version
-0 9 * * * cd /home/USER/slideshow && \
-  /usr/bin/python3 scripts/fetch_news.py >> logs/news.log 2>&1 && \
-  /usr/bin/python3 scripts/generate_slideshow.py >> logs/build.log 2>&1 && \
-  sudo systemctl restart slideshow-stream.service
