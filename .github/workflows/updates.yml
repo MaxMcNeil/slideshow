@@ -1,0 +1,24 @@
+name: Capture News
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with: { node-version: '20' }
+      - run: npm install playwright cheerio axios sharp
+      - run: npx playwright install chromium --with-deps
+      - run: rm -f *.png total.json debug_*.html debug_*.png
+      - run: node capture.js
+      - run: |
+          git config user.name "bot"
+          git config user.email "bot@github.com"
+          git add -A
+          git commit -m "Update cards" || echo "No changes"
+          git push
