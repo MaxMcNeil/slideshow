@@ -408,7 +408,9 @@ async function dedupKey(el) {
 
 async function main() {
     console.log("--- DÉBUT DE LA CAPTURE DES CARTES ---");
-    const browser = await chromium.launch({ args: ['--no-sandbox'] });
+    const browser = await chromium.launch({
+        args: ['--no-sandbox', '--disable-blink-features=AutomationControlled']
+    });
 
     let count = 0;
     const perSourceCounts = {};
@@ -417,12 +419,29 @@ async function main() {
     for (const source of sources) {
         const page = await browser.newPage({
             viewport: { width: 1280, height: 900 },
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            // Full, realistic UA string — the previous one was missing the
+            // Chrome/Safari suffix entirely, which doesn't match any real
+            // browser and is an easy signal for bot-detection (e.g. Akamai)
+            // to flag and hard-block on.
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            locale: 'fr-FR'
+        });
+
+        // Basic automation-fingerprint reduction: hide navigator.webdriver,
+        // which Playwright/headless Chromium expose by default and which
+        // WAFs commonly check for.
+        await page.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         });
 
         await page.setExtraHTTPHeaders({
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache'
+            'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8'
+            // Deliberately NOT sending Cache-Control/Pragma: no-cache anymore —
+            // combined with the cache-busting query param, that header pattern
+            // is itself a classic automated-scraping signal to bot-detection
+            // systems (real browsers rarely send it on normal navigation).
+            // The per-request _cb= query param already defeats CDN caching
+            // without needing these headers too.
         });
 
         perSourceCounts[source.name] = 0;
