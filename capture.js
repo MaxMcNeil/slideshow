@@ -58,6 +58,15 @@ async function acceptCookiesAndConsent(page) {
         'accepter', 'autoriser', "j'autorise", 'continuer sans accepter',
         'ok pour moi', 'accepter tout', 'consentir'
     ];
+    const knownSelectors = [
+        '#didomi-notice-agree-button',
+        '.didomi-continue-without-agreeing',
+        '#sp_message_iframe_1 button',
+        'button[title*="Accepter"]',
+        'button[aria-label*="Accepter"]',
+        '[class*="sp_choice_type_11"]',
+        '[class*="sp_choice_type_ACCEPT_ALL"]'
+    ];
     for (const frame of page.frames()) {
         try {
             await frame.evaluate((pats) => {
@@ -72,6 +81,12 @@ async function acceptCookiesAndConsent(page) {
                 if (match) match.click();
             }, patterns);
         } catch (e) { /* cross-origin frame or detached — ignore */ }
+
+        for (const sel of knownSelectors) {
+            try {
+                await frame.click(sel, { timeout: 800 });
+            } catch (e) { /* selector not present — expected most of the time */ }
+        }
     }
 }
 
@@ -137,19 +152,25 @@ async function scrollUntilTextOrLimit(page, textPatterns, maxSteps = 10, pauseMs
 
 // Finds the page-absolute Y (top and bottom) of the first element whose
 // visible text contains one of the given patterns. Returns null if none found.
-async function findAnchorY(page, textPatterns) {
-    return await page.evaluate((pats) => {
-        const all = document.querySelectorAll('h1,h2,h3,h4,p,div,span,button,a,section');
+async function findAnchorY(page, textPatterns, opts = {}) {
+    return await page.evaluate(({ pats, onlyClickable }) => {
+        const selector = onlyClickable ? 'button,a,[role="button"]' : 'h1,h2,h3,h4,p,div,span,button,a,section';
+        const all = document.querySelectorAll(selector);
         for (const el of all) {
             const t = (el.innerText || '').trim().toLowerCase();
             if (!t || t.length > 400) continue;
             if (pats.some(p => t.includes(p.toLowerCase()))) {
                 const r = el.getBoundingClientRect();
+                // Skip invisible/zero-size matches (hidden SEO/a11y duplicates,
+                // display:none nav items, etc.) — only accept real, rendered hits.
+                if (r.width <= 0 || r.height <= 0) continue;
+                const cs = getComputedStyle(el);
+                if (cs.display === 'none' || cs.visibility === 'hidden') continue;
                 return { top: r.top + window.scrollY, bottom: r.bottom + window.scrollY };
             }
         }
         return null;
-    }, textPatterns);
+    }, { pats: textPatterns, onlyClickable: !!opts.onlyClickable });
 }
 
 function isAdLike(text, hasIframe, classAndId) {
@@ -178,7 +199,10 @@ async function detectCards(page, { sizeWindow, minY = null, maxY = null, filterA
             const dateRe = /publié le\s+\d{1,2}\s+\w+\s+\d{4}/i;
             document.querySelectorAll('p,span,div,time').forEach(el => {
                 const own = (el.innerText || '').trim();
-                if (own.length < 80 && dateRe.test(own)) anchors.push(el);
+                if (own.length < 80 && dateRe.test(own)) {
+                    const r = el.getBoundingClientRect();
+                    if (r.width > 0 && r.height > 0) anchors.push(el);
+                }
             });
         }
 
@@ -329,7 +353,7 @@ async function captureAnchored(page, source) {
 
     let maxY = null;
     if (source.stopTextPatterns && source.stopTextPatterns.length) {
-        const stopAnchor = await findAnchorY(page, source.stopTextPatterns);
+        const stopAnchor = await findAnchorY(page, source.stopTextPatterns, { onlyClickable: true });
         if (stopAnchor) maxY = stopAnchor.top;
     }
 
@@ -409,8 +433,10 @@ async function main() {
             await page.goto(freshUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
             await page.waitForTimeout(2000);
 
-            await acceptCookiesAndConsent(page);
-            await page.waitForTimeout(500);
+            for (let attempt = 0; attempt < 3; attempt++) {
+                await acceptCookiesAndConsent(page);
+                await page.waitForTimeout(700);
+            }
             await hideOverlaysAndAds(page);
 
             let elements;
@@ -481,4 +507,3 @@ main().catch(err => {
     console.error("Erreur fatale:", err);
     process.exit(1);
 });
-        
