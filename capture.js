@@ -84,13 +84,15 @@ async function acceptCookiesAndConsent(page) {
 
         for (const sel of knownSelectors) {
             try {
-                await frame.click(sel, { timeout: 800 });
-            } catch (e) { /* selector not present — expected most of the time */ }
+                // frame.$() returns instantly (null if absent) — no waiting.
+                // Only pay a click-timeout cost on the rare frame that
+                // actually has a match, instead of on every ad iframe too.
+                const el = await frame.$(sel);
+                if (el) await el.click({ timeout: 500 }).catch(() => {});
+            } catch (e) { /* cross-origin frame or detached — ignore */ }
         }
     }
-}
-
-// ---------- overlay / ad hiding (fixed/sticky elements) ----------
+    // ---------- overlay / ad hiding (fixed/sticky elements) ----------
 
 async function hideOverlaysAndAds(page) {
     const hiddenCount = await page.evaluate(() => {
@@ -313,23 +315,42 @@ async function captureCanard(page) {
 
     const elements = await page.locator('[data-capture-card]').all();
 
-    // Date-limit: keep everything, but stop once we hit a dated card older
-    // than J-3. Cards with no date at all are kept (treated as "recent").
+    // Date-limit: keep everything, but stop once we hit a *run* of dated
+    // cards older than J-3. We tolerate the occasional out-of-order old card
+    // (e.g. a featured/pinned older piece) rather than stopping on the very
+    // first one — some Canard sections (enquêtes, web-plus) aren't strictly
+    // newest-first. Cards with no date at all are kept (treated as recent).
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 3);
     cutoff.setHours(0, 0, 0, 0);
+    const MAX_CONSECUTIVE_OLD = 4;
 
     const kept = [];
+    let consecutiveOld = 0;
     for (const el of elements) {
         const text = (await el.textContent()) || '';
         const date = parseFrenchDate(text);
         if (date && date < cutoff) {
-            console.log(`  ⏹ Canard: stopping at card dated before J-3 (${date.toDateString()})`);
-            break;
+            consecutiveOld++;
+            if (consecutiveOld >= MAX_CONSECUTIVE_OLD) {
+                console.log(`  ⏹ Canard: stopping after ${MAX_CONSECUTIVE_OLD} cartes consécutives antérieures à J-3 (dernière: ${date.toDateString()})`);
+                break;
+            }
+            continue; // skip this one but keep scanning
         }
+        consecutiveOld = 0;
         kept.push(el);
         if (kept.length >= MAX_CARDS_PER_SOURCE) break;
+        }
+     Safety net: if the date filter happened to eliminate everything
+    // (e.g. this section just hasn't published in 3+ days), fall back to
+    // the most recent cards regardless of date rather than leaving the
+    // source empty.
+    if (kept.length === 0 && elements.length > 0) {
+        console.log(`  ⚠ Canard: filtre de date a tout éliminé — repli sur les ${Math.min(8, elements.length)} premières cartes sans filtre`);
+        return elements.slice(0, Math.min(8, elements.length));
     }
+
     return kept;
 }
 
