@@ -206,11 +206,24 @@ async function detectCards(page, { sizeWindow, minY = null, maxY = null, filterA
         }
 
         let bestEls = [];
-        for (const elSet of sigToEls.values()) {
-            const inWindow = Array.from(elSet).filter(inBounds);
+        const sigDebug = [];
+        for (const [sig, elSet] of sigToEls.entries()) {
+            const elsArr = Array.from(elSet);
+            const inWindow = elsArr.filter(inBounds);
             if (inWindow.length > bestEls.length) bestEls = inWindow;
+            const sample = elsArr[0];
+            const r = sample.getBoundingClientRect();
+            sigDebug.push({
+                sig: sig.slice(0, 80),
+                total: elsArr.length,
+                inWindow: inWindow.length,
+                w: Math.round(r.width),
+                h: Math.round(r.height),
+                absTop: Math.round(r.top + window.scrollY)
+            });
         }
-
+        sigDebug.sort((a, b) => b.total - a.total);
+        window.__debugSigSamples = sigDebug.slice(0, 8);
         window.__debugAnchorCount = anchors.length;
 
         // sort top-to-bottom so downstream date-limit logic can stop early
@@ -268,7 +281,10 @@ async function captureCanard(page) {
         dateAnchor: true
     });
     const rawAnchors = await page.evaluate(() => window.__debugAnchorCount || 0);
+    const sigSamples = await page.evaluate(() => window.__debugSigSamples || []);
     console.log(`  🔍 Canard: anchor "à la une" ${anchor ? 'found' : 'NOT FOUND (using top of page)'}, ${rawAnchors} anchors bruts (img+dates), ${found} candidate cards`);
+    console.log(`  📊 top signatures (minY=${minY}):`);
+    sigSamples.forEach(s => console.log(`     [${s.total}x, ${s.inWindow} in-window] ${s.w}x${s.h}px @y=${s.absTop} :: ${s.sig}`));
     if (found === 0) return [];
 
     const elements = await page.locator('[data-capture-card]').all();
@@ -325,7 +341,10 @@ async function captureAnchored(page, source) {
         dateAnchor: false
     });
     const rawAnchors = await page.evaluate(() => window.__debugAnchorCount || 0);
+    const sigSamples = await page.evaluate(() => window.__debugSigSamples || []);
     console.log(`  🔍 ${source.name}: start-anchor ${anchor ? 'found' : 'NOT FOUND (top of page)'}, stop-anchor ${maxY !== null ? 'found' : 'none'}, ${rawAnchors} anchors bruts (images), ${found} candidate cards`);
+    console.log(`  📊 top signatures (minY=${minY}, maxY=${maxY}):`);
+    sigSamples.forEach(s => console.log(`     [${s.total}x, ${s.inWindow} in-window] ${s.w}x${s.h}px @y=${s.absTop} :: ${s.sig}`));
     if (found === 0) return [];
 
     const elements = await page.locator('[data-capture-card]').all();
@@ -462,4 +481,4 @@ main().catch(err => {
     console.error("Erreur fatale:", err);
     process.exit(1);
 });
-    
+        
