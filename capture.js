@@ -78,19 +78,31 @@ async function acceptCookiesAndConsent(page) {
 // ---------- overlay / ad hiding (fixed/sticky elements) ----------
 
 async function hideOverlaysAndAds(page) {
-    await page.evaluate(() => {
+    const hiddenCount = await page.evaluate(() => {
+        let n = 0;
         document.querySelectorAll('body *').forEach(el => {
             const cs = getComputedStyle(el);
             if ((cs.position === 'fixed' || cs.position === 'sticky') &&
                 el.offsetWidth > 0 && el.offsetHeight > 0) {
-                el.style.setProperty('display', 'none', 'important');
+                // Only treat it as a popup/banner if it's small relative to
+                // the viewport — real popups are never most of the screen.
+                // This avoids nuking sites that use fixed/sticky wrappers
+                // for their actual main content layout.
+                const tooBig = el.offsetWidth > window.innerWidth * 0.95 &&
+                               el.offsetHeight > window.innerHeight * 0.6;
+                if (!tooBig) {
+                    el.style.setProperty('display', 'none', 'important');
+                    n++;
+                }
             }
         });
         document.querySelectorAll(
             'iframe[id*="google_ads"], iframe[id*="ad_"], [id*="ad-"], ' +
             '[class*="popup"], [class*="cookie"], [class*="consent"], [class*="modal"]'
-        ).forEach(el => el.style.setProperty('display', 'none', 'important'));
+        ).forEach(el => { el.style.setProperty('display', 'none', 'important'); n++; });
+        return n;
     });
+    console.log(`  🧹 overlays masqués: ${hiddenCount}`);
 }
 
 // ---------- generic helpers ----------
@@ -199,6 +211,8 @@ async function detectCards(page, { sizeWindow, minY = null, maxY = null, filterA
             if (inWindow.length > bestEls.length) bestEls = inWindow;
         }
 
+        window.__debugAnchorCount = anchors.length;
+
         // sort top-to-bottom so downstream date-limit logic can stop early
         bestEls.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
 
@@ -253,7 +267,8 @@ async function captureCanard(page) {
         filterAds: false,
         dateAnchor: true
     });
-    console.log(`  🔍 Canard: anchor "à la une" ${anchor ? 'found' : 'NOT FOUND (using top of page)'}, ${found} candidate cards`);
+    const rawAnchors = await page.evaluate(() => window.__debugAnchorCount || 0);
+    console.log(`  🔍 Canard: anchor "à la une" ${anchor ? 'found' : 'NOT FOUND (using top of page)'}, ${rawAnchors} anchors bruts (img+dates), ${found} candidate cards`);
     if (found === 0) return [];
 
     const elements = await page.locator('[data-capture-card]').all();
@@ -309,7 +324,8 @@ async function captureAnchored(page, source) {
         filterAds: !!source.filterAds,
         dateAnchor: false
     });
-    console.log(`  🔍 ${source.name}: start-anchor ${anchor ? 'found' : 'NOT FOUND (top of page)'}, stop-anchor ${maxY !== null ? 'found' : 'none'}, ${found} candidate cards`);
+    const rawAnchors = await page.evaluate(() => window.__debugAnchorCount || 0);
+    console.log(`  🔍 ${source.name}: start-anchor ${anchor ? 'found' : 'NOT FOUND (top of page)'}, stop-anchor ${maxY !== null ? 'found' : 'none'}, ${rawAnchors} anchors bruts (images), ${found} candidate cards`);
     if (found === 0) return [];
 
     const elements = await page.locator('[data-capture-card]').all();
@@ -446,3 +462,4 @@ main().catch(err => {
     console.error("Erreur fatale:", err);
     process.exit(1);
 });
+    
