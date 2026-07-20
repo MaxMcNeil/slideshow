@@ -101,6 +101,7 @@
             height: 92%;
             max-width: 1050px;
             max-height: 900px;
+            overflow: hidden;
             transform: translate(-50%, -50%);
         }
 
@@ -125,6 +126,7 @@
             object-fit: contain;
             border-radius: 10px;
             box-shadow: 0 0 60px rgba(0, 0, 0, 0.8);
+            transform-origin: center center;
         }
 
         .page .sheen {
@@ -186,6 +188,22 @@
         function urlFor(i, ts) {
             return `card_${i}.png?t=${ts}`;
         }
+
+        // Only cards with a very wide/short shape (lots of empty vertical
+        // space when fit to the frame) get a modest zoom to improve
+        // readability. Normal/portrait-shaped cards are left untouched.
+        // overflow:hidden on .card-slot safely clips anything the zoom
+        // would otherwise push past the frame edges.
+        const WIDE_RATIO_THRESHOLD = 3.0;
+        const WIDE_ZOOM = 1.3;
+        function applyAdaptiveZoom(imgEl) {
+            imgEl.onload = () => {
+                const ratio = imgEl.naturalWidth / (imgEl.naturalHeight || 1);
+                imgEl.style.transform = ratio > WIDE_RATIO_THRESHOLD ? `scale(${WIDE_ZOOM})` : 'none';
+            };
+        }
+        applyAdaptiveZoom(document.getElementById('imgA'));
+        applyAdaptiveZoom(document.getElementById('imgB'));
 
         function setStatusLoading() {
             document.getElementById('status').textContent = 'Chargement...';
