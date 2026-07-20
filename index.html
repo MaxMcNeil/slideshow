@@ -189,22 +189,6 @@
             return `card_${i}.png?t=${ts}`;
         }
 
-        // Only cards with a very wide/short shape (lots of empty vertical
-        // space when fit to the frame) get a modest zoom to improve
-        // readability. Normal/portrait-shaped cards are left untouched.
-        // overflow:hidden on .card-slot safely clips anything the zoom
-        // would otherwise push past the frame edges.
-        const WIDE_RATIO_THRESHOLD = 3.0;
-        const WIDE_ZOOM = 1.1;
-        function applyAdaptiveZoom(imgEl) {
-            imgEl.onload = () => {
-                const ratio = imgEl.naturalWidth / (imgEl.naturalHeight || 1);
-                imgEl.style.transform = ratio > WIDE_RATIO_THRESHOLD ? `scale(${WIDE_ZOOM})` : 'none';
-            };
-        }
-        applyAdaptiveZoom(document.getElementById('imgA'));
-        applyAdaptiveZoom(document.getElementById('imgB'));
-
         function setStatusLoading() {
             document.getElementById('status').textContent = 'Chargement...';
         }
