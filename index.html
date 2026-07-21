@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="fr" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@700;900&display=swap" rel="stylesheet">
+    <style>
+        html, body {
+            margin: 0;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Cairo', sans-serif;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* static background layer — no animation */
+        #bg {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            background: radial-gradient(ellipse at center, #4a0000 0%, #1a0000 55%, #000000 100%);
+        }
+
+        /* animated marquee-style alert stripes down each side */
+        body::before, body::after {
+            content: "";
+            position: fixed;
+            top: 0;
+            bottom: 0;
+            width: 20px;
+            background: repeating-linear-gradient(
+                45deg,
+                #e40000 0px, #e40000 18px,
+                #150000 18px, #150000 36px
+            );
+            opacity: 0.95;
+            z-index: 1;
+            animation: stripesMove 1s linear infinite;
+        }
+        body::before { left: 0; }
+        body::after  { right: 0; }
+
+        @keyframes stripesMove {
+            from { background-position: 0 0; }
+            to   { background-position: 0 51px; }
+        }
+
+        #header {
+            position: relative;
+            flex: 0 0 auto;
+            z-index: 5;
+            text-align: center;
+            padding: clamp(70px, 9vh, 150px) 16px 14px;
+            pointer-events: none;
+        }
+        #header .title {
+            font-size: 2.6rem;
+            font-weight: 900;
+            color: #ff3b3b;
+            text-shadow: 0 0 14px rgba(255,0,0,0.9), 0 0 34px rgba(255,0,0,0.55);
+            letter-spacing: 1px;
+        }
+        #header .status {
+            margin-top: 8px;
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #ffdede;
+            text-shadow: 0 0 8px rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .live-dot {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #ff1414;
+        }
+
+        /* --- page-turn stage: exactly TWO slots exist, ever --- */
+        #stage {
+            position: relative;
+            flex: 1 1 auto;
+            min-height: 0;
+            z-index: 2;
+            perspective: 2200px;
+        }
+
+        .card-slot {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 84%;
+            height: 92%;
+            max-width: 1050px;
+            max-height: 900px;
+            transform: translate(-50%, -50%);
+        }
+
+        .page {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background: #0a0a0a;
+            border-radius: 10px;
+            transform-style: preserve-3d;
+            transform-origin: right center;
+            transform: rotateY(0deg);
+            transition: transform 1s cubic-bezier(.45,.05,.55,.95), opacity .5s ease-in .5s;
+            backface-visibility: hidden;
+        }
+        .page.notransition { transition: none !important; }
+
+        .page img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 10px;
+            box-shadow: 0 0 60px rgba(0, 0, 0, 0.8);
+            transform-origin: center center;
+        }
+
+        .page .sheen {
+            position: absolute;
+            inset: 0;
+            border-radius: 10px;
+            background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,0.35) 50%, transparent 70%);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Caption popup: readable text version of the card, shown above the
+           card image only for small/hard-to-read cards, only while that
+           exact card is on screen. Lives as a sibling of the card-slots
+           (not nested inside one) so it isn't clipped by their
+           overflow:hidden. */
+        .card-popup {
+            position: absolute;
+            left: 50%;
+            top: 0; /* actual value set by JS, centered in the real header/card gap */
+            width: 84%;
+            max-width: 1050px;
+            padding: 16px 22px;
+            border-radius: 12px;
+            background: linear-gradient(180deg, #2a0000 0%, #140000 100%);
+            border: 2px solid #ff2b2b;
+            box-shadow: 0 0 26px rgba(255, 20, 20, 0.45), 0 8px 24px rgba(0,0,0,0.6);
+            opacity: 0;
+            pointer-events: none;
+            transform: translate(-50%, -50%) scale(0.9);
+            transition: opacity .4s ease, transform .4s ease;
+            z-index: 6;
+            max-height: 30vh;
+            overflow: hidden;
+        }
+        .card-popup.visible {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1);
+        }
+        .card-popup .cp-body {
+            font-family: 'Cairo', sans-serif;
+            font-weight: 700;
+            font-size: 1.15rem;
+            line-height: 1.4;
+            color: #ffe9e9;
+            text-shadow: 0 0 10px rgba(255,0,0,0.5);
+        }
+        .card-popup .cp-date {
+            margin-top: 8px;
+            font-family: 'Cairo', sans-serif;
+            font-weight: 700;
+            font-size: 0.85rem;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: #ff5555;
+        }
+        .page.folding .sheen {
+            opacity: 1;
+            animation: sheenSweep 1s ease-in-out;
+        }
+        @keyframes sheenSweep {
+            from { transform: translateX(-100%); }
+            to   { transform: translateX(100%); }
+        }
+
+        .page.folding {
+            transform: rotateY(-150deg);
+            opacity: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="bg"></div>
+    <div id="header">
+        <div class="title">DÉPÊCHES EN DIRECT</div>
+        <div class="status" id="status">Chargement...</div>
+    </div>
+
+    <div id="stage">
+        <div class="card-slot" id="slotA">
+            <div class="page" id="pageA">
+                <img id="imgA" alt="">
+                <div class="sheen"></div>
+            </div>
+        </div>
+        <div class="card-slot" id="slotB">
+            <div class="page" id="pageB">
+                <img id="imgB" alt="">
+                <div class="sheen"></div>
+            </div>
+        </div>
+        <div class="card-popup" id="cardPopup">
+            <div class="cp-body" id="cpBody"></div>
+            <div class="cp-date" id="cpDate"></div>
+        </div>
+    </div>
+
+    <script>
+        const CYCLE_MS = 10000;            // durée d'affichage de chaque carte
+        const FOLD_MS = 1000;              // doit correspondre à la durée de transition CSS
+        const REFRESH_MS = 5 * 60 * 1000;  // fréquence de vérification des nouvelles cartes
+
+        let count = 0;
+        let cur = 0;          // index actuellement affiché
+        let frontIsA = true;  // quel slot est actuellement au premier plan
+        let cycleTimer = null;
+        let audioCtx = null;
+        let cardMeta = [];    // texte extrait de chaque carte (cards.json)
+        let audioCtx = null;
+
+        const WIDE_RATIO_THRESHOLD = 3.0; // au-delà, la carte est jugée "petite/illisible"
+
+        function urlFor(i, ts) {
+            return `card_${i}.png?t=${ts}`;
+        }
+
+        // Shows the text popup only when the currently-front card is a
+        // wide/short shape (hard to read at its native rendered size) and
+        // we have extracted text for it. Hidden otherwise.
+        // Centers the popup precisely in the real gap between the header
+        // and the top of the card (measured live, not guessed via CSS %).
+        function positionPopup() {
+            const stageRect = document.getElementById('stage').getBoundingClientRect();
+            const slotRect = document.getElementById('slotA').getBoundingClientRect();
+            const gap = slotRect.top - stageRect.top;
+            document.getElementById('cardPopup').style.top = Math.max(gap / 2, 20) + 'px';
+        }
+        window.addEventListener('resize', positionPopup);
+
+        function refreshPopup() {
+            const frontImg = document.getElementById(frontIsA ? 'imgA' : 'imgB');
+            const popup = document.getElementById('cardPopup');
+            const meta = cardMeta[cur];
+            const isWide = frontImg.complete && frontImg.naturalWidth > 0 &&
+                           (frontImg.naturalWidth / frontImg.naturalHeight) > WIDE_RATIO_THRESHOLD;
+            if (isWide && meta && meta.body) {
+                positionPopup();
+                document.getElementById('cpBody').textContent = meta.body;
+                document.getElementById('cpDate').textContent = meta.date ? `Publié le ${meta.date}` : '';
+                popup.classList.add('visible');
+            } else {
+                popup.classList.remove('visible');
+            }
+        }
+        document.getElementById('imgA').onload = refreshPopup;
+        document.getElementById('imgB').onload = refreshPopup;
+
+        function setStatusLoading() {
+            document.getElementById('status').textContent = 'Chargement...';
+        }
+
+        function setStatusLive(n) {
+            document.getElementById('status').innerHTML =
+                `<span class="live-dot"></span> EN DIRECT — ${n} dépêches`;
+        }
+
+        // Soft three-note ascending chime — the classic "breaking news"
+        // cadence, kept short and gentle rather than a flat/loud beep.
+        function playChime() {
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+                if (audioCtx.state !== 'running') return;
+
+                const now = audioCtx.currentTime;
+                const notes = [
+                    { freq: 659.25, start: 0.00, dur: 0.16 }, // E5
+                    { freq: 783.99, start: 0.14, dur: 0.16 }, // G5
+                    { freq: 987.77, start: 0.28, dur: 0.30 }  // B5, held slightly longer
+                ];
+                notes.forEach(n => {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'triangle'; // softer/rounder than sine, less shrill than square
+                    osc.frequency.value = n.freq;
+                    gain.gain.setValueAtTime(0.0001, now + n.start);
+                    gain.gain.exponentialRampToValueAtTime(0.14, now + n.start + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + n.start + n.dur);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(now + n.start);
+                    osc.stop(now + n.start + n.dur + 0.02);
+                });
+            } catch (e) {
+                console.warn('Chime échoué (audio probablement bloqué) :', e.message);
+            }
+        }
+
+        function tryUnlockAudio() {
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+            } catch (e) { /* ignore */ }
+        }
+        ['click', 'touchstart', 'keydown', 'pointerdown'].forEach(evt =>
+            document.addEventListener(evt, tryUnlockAudio, { passive: true })
+        );
+        document.addEventListener('visibilitychange', tryUnlockAudio);
+
+        function initStage(newCount) {
+            count = newCount;
+            cur = 0;
+            frontIsA = true;
+            const ts = Date.now();
+
+            document.getElementById('imgA').src = urlFor(0, ts);
+            document.getElementById('imgB').src = urlFor(count > 1 ? 1 : 0, ts);
+
+            const pageA = document.getElementById('pageA');
+            const pageB = document.getElementById('pageB');
+            [pageA, pageB].forEach(p => {
+                p.classList.add('notransition');
+                p.classList.remove('folding');
+            });
+            void pageA.offsetWidth;
+            [pageA, pageB].forEach(p => p.classList.remove('notransition'));
+
+            document.getElementById('slotA').style.zIndex = 3;
+            document.getElementById('slotB').style.zIndex = 2;
+
+            setStatusLive(count);
+            refreshPopup();
+        }
+
+        function turnPage() {
+            if (count <= 1) return;
+
+            const frontId = frontIsA ? 'A' : 'B';
+            const backId  = frontIsA ? 'B' : 'A';
+            const frontPage = document.getElementById(`page${frontId}`);
+            const frontSlot = document.getElementById(`slot${frontId}`);
+            const backSlot  = document.getElementById(`slot${backId}`);
+
+            frontPage.classList.add('folding');
+            document.getElementById('cardPopup').classList.remove('visible');
+            playChime();
+
+            setTimeout(() => {
+                frontPage.classList.add('notransition');
+                frontPage.classList.remove('folding');
+                void frontPage.offsetWidth;
+                frontPage.classList.remove('notransition');
+
+                frontSlot.style.zIndex = 2;
+                backSlot.style.zIndex = 3;
+
+                cur = (cur + 1) % count;
+                const nextIdx = (cur + 1) % count;
+                document.getElementById(`img${frontId}`).src = urlFor(nextIdx, Date.now());
+
+                frontIsA = !frontIsA;
+                refreshPopup();
+            }, FOLD_MS);
+        }
+
+        function startCycle() {
+            if (cycleTimer) clearInterval(cycleTimer);
+            cycleTimer = setInterval(turnPage, CYCLE_MS);
+        }
+
+        async function checkForUpdates() {
+            try {
+                const [totalRes, cardsRes] = await Promise.all([
+                    fetch('total.json?t=' + Date.now()),
+                    fetch('cards.json?t=' + Date.now())
+                ]);
+                const data = await totalRes.json();
+                if (cardsRes.ok) {
+                    const cardsData = await cardsRes.json();
+                    cardMeta = cardsData.items || [];
+                }
+                if (data.count && data.count !== count) {
+                    console.log(`Nouveau contenu détecté (${data.count} cartes), rechargement du diaporama...`);
+                    initStage(data.count);
+                } else {
+                    refreshPopup(); // meta text may have refreshed even if count didn't change
+                }
+            } catch (e) {
+                console.error("En attente des données...", e);
+            }
+        }
+
+        async function init() {
+            setStatusLoading();
+            tryUnlockAudio();
+            await checkForUpdates();
+            startCycle();
+            setInterval(checkForUpdates, REFRESH_MS);
+        }
+
+        init();
+    </script>
+</body>
+</html>
