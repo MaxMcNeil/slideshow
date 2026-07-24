@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="fr" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@700;900&family=Poppins:wght@700;800;900&display=swap" rel="stylesheet">
+    <style>
+        html, body {
+            margin: 0;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Cairo', sans-serif;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* static background layer — no animation */
+        #bg {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            background: radial-gradient(ellipse at center, #4a0000 0%, #1a0000 55%, #000000 100%);
+        }
+
+        /* animated marquee-style alert stripes down each side */
+        body::before, body::after {
+            content: "";
+            position: fixed;
+            top: 0;
+            bottom: 0;
+            width: 20px;
+            background: repeating-linear-gradient(
+                45deg,
+                #e40000 0px, #e40000 18px,
+                #150000 18px, #150000 36px
+            );
+            opacity: 0.95;
+            z-index: 1;
+            animation: stripesMove 1s linear infinite;
+        }
+        body::before { left: 0; }
+        body::after  { right: 0; }
+
+        @keyframes stripesMove {
+            from { background-position: 0 0; }
+            to   { background-position: 0 51px; }
+        }
+
+        /* ================= HEADER ================= */
+        #header {
+            position: relative;
+            flex: 0 0 auto;
+            z-index: 5;
+            text-align: center;
+            padding: clamp(60px, 8vh, 130px) 16px 10px;
+            pointer-events: none;
+        }
+        #header .title {
+            font-size: 2.6rem;
+            font-weight: 900;
+            color: #ff3b3b;
+            text-shadow: 0 0 14px rgba(255,0,0,0.9), 0 0 34px rgba(255,0,0,0.55);
+            letter-spacing: 1px;
+        }
+        #header .status {
+            margin-top: 8px;
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #ffdede;
+            text-shadow: 0 0 8px rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .live-dot {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #ff1414;
+        }
+
+        /* ================= INFO STRIP (rotating panels) ================= */
+        #infoStrip {
+            position: relative;
+            flex: 0 0 auto;
+            z-index: 5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 54px;
+            margin: 0 auto 6px;
+            width: 84%;
+            max-width: 1050px;
+            pointer-events: none;
+        }
+        #infoStrip .info-panel {
+            font-family: 'Poppins', sans-serif;
+            font-weight: 700;
+            font-size: 1.05rem;
+            color: #ffb3b3;
+            text-align: center;
+            letter-spacing: 0.3px;
+        }
+        #infoStrip .info-panel b {
+            color: #ff5252;
+            font-weight: 800;
+        }
+
+        /* ================= STAGE (cards + popup) ================= */
+        #stage {
+            position: relative;
+            flex: 1 1 auto;
+            min-height: 0;
+            z-index: 2;
+            perspective: 2200px;
+        }
+
+        .card-slot {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 84%;
+            height: 92%;
+            max-width: 1050px;
+            max-height: 900px;
+            overflow: hidden;
+            transform: translate(-50%, -50%);
+        }
+
+        .page {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background: #0a0a0a;
+            border-radius: 10px;
+            transform-style: preserve-3d;
+            transform-origin: right center;
+            transform: rotateY(0deg);
+            transition: transform 1s cubic-bezier(.45,.05,.55,.95), opacity .5s ease-in .5s;
+            backface-visibility: hidden;
+        }
+        .page.notransition { transition: none !important; }
+
+        .page img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 10px;
+            box-shadow: 0 0 60px rgba(0, 0, 0, 0.8);
+            transform-origin: center center;
+        }
+
+        /* text-only summary screen — replaces the image for the "summary"
+           phase of a captioned card. Never a screenshot: reduces exposure
+           time of the original press image and puts the emphasis on the
+           reformatted text + mandatory source citation instead. */
+        .summary-panel {
+            display: none;
+            width: 100%;
+            height: 100%;
+            border-radius: 10px;
+            box-shadow: 0 0 60px rgba(0, 0, 0, 0.8);
+            background: linear-gradient(160deg, #2a0000 0%, #0d0000 100%);
+            border: 2px solid #ff2b2b;
+            box-sizing: border-box;
+            padding: 5%;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            gap: 22px;
+        }
+        .summary-panel .sp-body {
+            font-family: 'Poppins', sans-serif;
+            font-weight: 800;
+            font-size: 2.1rem;
+            line-height: 1.45;
+            color: #ffe9e9;
+            text-shadow: 0 0 10px rgba(255,0,0,0.5);
+        }
+        .summary-panel .sp-source {
+            font-family: 'Poppins', sans-serif;
+            font-weight: 700;
+            font-size: 1.25rem;
+            letter-spacing: 0.4px;
+            color: #ff6a6a;
+        }
+
+        .page .sheen {
+            position: absolute;
+            inset: 0;
+            border-radius: 10px;
+            background: linear-gradient(100deg, transparent 30%, rgba(255,255,255,0.35) 50%, transparent 70%);
+            opacity: 0;
+            pointer-events: none;
+        }
+        .page.folding .sheen {
+            opacity: 1;
+            animation: sheenSweep 1s ease-in-out;
+        }
+        @keyframes sheenSweep {
+            from { transform: translateX(-100%); }
+            to   { transform: translateX(100%); }
+        }
+        .page.folding {
+            transform: rotateY(-150deg);
+            opacity: 0;
+        }
+
+        /* small popup: caption shown above wide/short images during their
+           image-phase only (redundant once the summary screen takes over). */
+        .card-popup {
+            position: absolute;
+            left: 50%;
+            top: 0;
+            height: 0;
+            width: 84%;
+            max-width: 1050px;
+            box-sizing: border-box;
+            padding: 14px 22px;
+            border-radius: 12px;
+            background: linear-gradient(180deg, #2a0000 0%, #140000 100%);
+            border: 2px solid #ff2b2b;
+            box-shadow: 0 0 26px rgba(255, 20, 20, 0.45), 0 8px 24px rgba(0,0,0,0.6);
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(-50%) scale(0.9);
+            transition: opacity .4s ease, transform .4s ease;
+            z-index: 6;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .card-popup.visible {
+            opacity: 1;
+            transform: translateX(-50%) scale(1);
+        }
+        .card-popup .cp-body {
+            font-family: 'Poppins', sans-serif;
+            font-weight: 800;
+            font-size: 1.5rem;
+            line-height: 1.4;
+            color: #ffe9e9;
+            text-shadow: 0 0 10px rgba(255,0,0,0.5);
+        }
+        .card-popup .cp-date {
+            margin-top: 10px;
+            font-family: 'Poppins', sans-serif;
+            font-weight: 800;
+            font-size: 1.05rem;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: #ff5555;
+        }
+
+        /* ================= TICKER (bottom band) ================= */
+        #ticker {
+            position: relative;
+            flex: 0 0 auto;
+            z-index: 5;
+            height: 56px;
+            margin-top: 6px;
+            background: linear-gradient(180deg, #1a0000, #0a0000);
+            border-top: 2px solid #ff2b2b;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+        }
+        #ticker .ticker-track {
+            display: inline-block;
+            white-space: nowrap;
+            font-family: 'Poppins', sans-serif;
+            font-weight: 700;
+            font-size: 1.15rem;
+            color: #ffdcdc;
+            padding-left: 100%;
+            animation: tickerScroll 40s linear infinite;
+        }
+        @keyframes tickerScroll {
+            from { transform: translateX(0); }
+            to   { transform: translateX(-100%); }
+        }
+        #ticker.engagement .ticker-track {
+            color: #fff;
+            font-weight: 800;
+            animation-duration: 14s;
+        }
+    </style>
+</head>
+<body>
+    <div id="bg"></div>
+
+    <div id="header">
+        <div class="title">DÉPÊCHES EN DIRECT</div>
+        <div class="status" id="status">Chargement...</div>
+    </div>
+
+    <div id="infoStrip">
+        <div class="info-panel" id="infoPanel"></div>
+    </div>
+
+    <div id="stage">
+        <div class="card-slot" id="slotA">
+            <div class="page" id="pageA">
+                <img id="imgA" alt="">
+                <div class="summary-panel" id="summaryA">
+                    <div class="sp-body" id="spBodyA"></div>
+                    <div class="sp-source" id="spSourceA"></div>
+                </div>
+                <div class="sheen"></div>
+            </div>
+        </div>
+        <div class="card-slot" id="slotB">
+            <div class="page" id="pageB">
+                <img id="imgB" alt="">
+                <div class="summary-panel" id="summaryB">
+                    <div class="sp-body" id="spBodyB"></div>
+                    <div class="sp-source" id="spSourceB"></div>
+                </div>
+                <div class="sheen"></div>
+            </div>
+        </div>
+        <div class="card-popup" id="cardPopup">
+            <div class="cp-body" id="cpBody"></div>
+            <div class="cp-date" id="cpDate"></div>
+        </div>
+    </div>
+
+    <div id="ticker">
+        <div class="ticker-track" id="tickerTrack">Chargement des dépêches...</div>
+    </div>
+
+    <script>
+        // ---------- tunables ----------
+        const FOLD_MS = 1000;                 // must match the CSS transition duration
+        const REFRESH_MS = 5 * 60 * 1000;     // how often to check for freshly captured cards
+        const IMAGE_DUR_WITH_SUMMARY = 5000;  // image phase, when a summary screen follows
+        const SUMMARY_DUR = 15000;            // text summary screen duration
+        const IMAGE_DUR_NO_SUMMARY = 20000;   // manual photos / no caption: flat display time
+        const WIDE_RATIO_THRESHOLD = 3.0;     // above this, the small popup is used during image phase
+        const INFO_ROTATE_MS = 5000;          // info-strip panel rotation
+        const ENGAGEMENT_INTERVAL_MS = 2 * 60 * 1000; // comment-prompt cadence
+        const ENGAGEMENT_SHOW_MS = 10000;     // how long the prompt replaces the ticker
+
+        // ---------- state ----------
+        let count = 0;
+        let cardMeta = [];       // [{body,date,source} | null] per card, from cards.json
+        let playlist = [];       // [{type:'image'|'summary', idx, dur}]
+        let playIdx = 0;
+        let frontIsA = true;
+        let slideTimer = null;
+        let audioCtx = null;
+        let soundVariant = 0;
+
+        function urlFor(i, ts) {
+            return `card_${i}.png?t=${ts}`;
+        }
+
+        // ---------- header status ----------
+        function setStatusLoading() {
+            document.getElementById('status').textContent = 'Chargement...';
+        }
+        function setStatusLive(n) {
+            document.getElementById('status').innerHTML =
+                `<span class="live-dot"></span> EN DIRECT — ${n} dépêches`;
+        }
+
+        // ---------- transition sounds: 3 distinct variants, cycled ---------
+        function playTransitionSound() {
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+                if (audioCtx.state !== 'running') return;
+
+                const now = audioCtx.currentTime;
+                const variant = soundVariant % 3;
+                soundVariant++;
+
+                function tone(freq, start, dur, type, peak) {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = type;
+                    osc.frequency.value = freq;
+                    gain.gain.setValueAtTime(0.0001, now + start);
+                    gain.gain.exponentialRampToValueAtTime(peak, now + start + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(now + start);
+                    osc.stop(now + start + dur + 0.02);
+                }
+
+                if (variant === 0) {
+                    tone(783.99, 0, 0.22, 'triangle', 0.14); // single soft G5
+                } else if (variant === 1) {
+                    tone(659.25, 0, 0.11, 'sine', 0.12);      // quick two-note "pip-pip"
+                    tone(880.00, 0.10, 0.14, 'sine', 0.12);
+                } else {
+                    tone(1046.5, 0, 0.10, 'triangle', 0.11);  // soft descending sweep
+                    tone(830.61, 0.09, 0.10, 'triangle', 0.10);
+                    tone(659.25, 0.18, 0.16, 'triangle', 0.09);
+                }
+            } catch (e) {
+                console.warn('Son de transition indisponible :', e.message);
+            }
+        }
+        function tryUnlockAudio() {
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+            } catch (e) { /* ignore */ }
+        }
+        ['click', 'touchstart', 'keydown', 'pointerdown'].forEach(evt =>
+            document.addEventListener(evt, tryUnlockAudio, { passive: true })
+        );
+        document.addEventListener('visibilitychange', tryUnlockAudio);
+
+        // ---------- small popup (image-phase caption for wide/short cards) ----------
+        const POPUP_MARGIN = 10;
+        function positionPopup() {
+            const stageRect = document.getElementById('stage').getBoundingClientRect();
+            const slotRect = document.getElementById('slotA').getBoundingClientRect();
+            const gap = slotRect.top - stageRect.top;
+            const popup = document.getElementById('cardPopup');
+            popup.style.top = POPUP_MARGIN + 'px';
+            popup.style.height = Math.max(gap - POPUP_MARGIN * 2, 30) + 'px';
+        }
+        const POPUP_MAX_FONT = 1.5, POPUP_MIN_FONT = 0.9, POPUP_FONT_STEP = 0.08;
+        function fitPopupText() {
+            const popup = document.getElementById('cardPopup');
+            const body = document.getElementById('cpBody');
+            let size = POPUP_MAX_FONT;
+            body.style.fontSize = size + 'rem';
+            let guard = 0;
+            while (popup.scrollHeight > popup.clientHeight && size > POPUP_MIN_FONT && guard < 30) {
+                size = Math.max(size - POPUP_FONT_STEP, POPUP_MIN_FONT);
+                body.style.fontSize = size + 'rem';
+                guard++;
+            }
+        }
+        function updatePopupForCurrentSlide() {
+            const slide = playlist[playIdx];
+            const popup = document.getElementById('cardPopup');
+            if (!slide) { popup.classList.remove('visible'); return; }
+            const meta = cardMeta[slide.idx];
+            const frontImg = document.getElementById(frontIsA ? 'imgA' : 'imgB');
+            const isWide = frontImg.complete && frontImg.naturalWidth > 0 &&
+                           (frontImg.naturalWidth / frontImg.naturalHeight) > WIDE_RATIO_THRESHOLD;
+            if (slide.type === 'image' && isWide && meta && meta.body) {
+                positionPopup();
+                document.getElementById('cpBody').textContent = meta.body;
+                document.getElementById('cpDate').textContent = meta.date ? `Publié le ${meta.date}` : '';
+                fitPopupText();
+                popup.classList.add('visible');
+            } else {
+                popup.classList.remove('visible');
+            }
+        }
+        window.addEventListener('resize', () => { positionPopup(); fitPopupText(); });
+
+        // ---------- playlist: image-only OR image+summary per card ----------
+        function buildPlaylist(n) {
+            const list = [];
+            for (let i = 0; i < n; i++) {
+                const meta = cardMeta[i];
+                if (meta && meta.body) {
+                    list.push({ type: 'image', idx: i, dur: IMAGE_DUR_WITH_SUMMARY });
+                    list.push({ type: 'summary', idx: i, dur: SUMMARY_DUR });
+                } else {
+                    list.push({ type: 'image', idx: i, dur: IMAGE_DUR_NO_SUMMARY });
+                }
+            }
+            return list;
+        }
+
+        function renderSlide(slotLetter, slide, ts) {
+            const img = document.getElementById('img' + slotLetter);
+            const summary = document.getElementById('summary' + slotLetter);
+            if (!slide) { img.style.display = 'none'; summary.style.display = 'none'; return; }
+            if (slide.type === 'image') {
+                img.src = urlFor(slide.idx, ts || Date.now());
+                img.style.display = 'block';
+                summary.style.display = 'none';
+            } else {
+                const meta = cardMeta[slide.idx] || {};
+                document.getElementById('spBody' + slotLetter).textContent = meta.body || '';
+                document.getElementById('spSource' + slotLetter).textContent =
+                    meta.source ? `Source : ${meta.source}` : '';
+                img.style.display = 'none';
+                summary.style.display = 'flex';
+            }
+        }
+
+        function initStage(newCount) {
+            count = newCount;
+            playlist = buildPlaylist(count);
+            playIdx = 0;
+            frontIsA = true;
+            const ts = Date.now();
+
+            renderSlide('A', playlist[0], ts);
+            renderSlide('B', playlist[1] || playlist[0], ts);
+
+            const pageA = document.getElementById('pageA');
+            const pageB = document.getElementById('pageB');
+            [pageA, pageB].forEach(p => {
+                p.classList.add('notransition');
+                p.classList.remove('folding');
+            });
+            void pageA.offsetWidth;
+            [pageA, pageB].forEach(p => p.classList.remove('notransition'));
+
+            document.getElementById('slotA').style.zIndex = 3;
+            document.getElementById('slotB').style.zIndex = 2;
+
+            setStatusLive(count);
+            updateTickerContent();
+            updatePopupForCurrentSlide();
+            scheduleNextSlide();
+        }
+
+        function scheduleNextSlide() {
+            if (slideTimer) clearTimeout(slideTimer);
+            const slide = playlist[playIdx];
+            const dur = slide ? slide.dur : 16000;
+            slideTimer = setTimeout(advanceSlide, dur);
+        }
+
+        function advanceSlide() {
+            if (playlist.length === 0) return;
+            const frontId = frontIsA ? 'A' : 'B';
+            const backId  = frontIsA ? 'B' : 'A';
+            const frontPage = document.getElementById(`page${frontId}`);
+            const frontSlot = document.getElementById(`slot${frontId}`);
+            const backSlot  = document.getElementById(`slot${backId}`);
+
+            frontPage.classList.add('folding');
+            document.getElementById('cardPopup').classList.remove('visible');
+            playTransitionSound();
+
+            setTimeout(() => {
+                frontPage.classList.add('notransition');
+                frontPage.classList.remove('folding');
+                void frontPage.offsetWidth;
+                frontPage.classList.remove('notransition');
+
+                frontSlot.style.zIndex = 2;
+                backSlot.style.zIndex = 3;
+
+                playIdx = (playIdx + 1) % playlist.length;
+                const preloadIdx = (playIdx + 1) % playlist.length;
+                renderSlide(frontId, playlist[preloadIdx], Date.now());
+
+                frontIsA = !frontIsA;
+                updatePopupForCurrentSlide();
+                scheduleNextSlide();
+            }, FOLD_MS);
+        }
+
+        // ---------- info strip: rotates world clock / live stats / sources ----------
+        const CLOCK_CITIES = [
+            { label: 'Paris', tz: 'Europe/Paris' },
+            { label: 'Bruxelles', tz: 'Europe/Brussels' },
+            { label: 'Genève', tz: 'Europe/Zurich' },
+            { label: 'Monaco', tz: 'Europe/Monaco' }
+        ];
+        let infoPanelIdx = 0;
+        function renderInfoPanel() {
+            const el = document.getElementById('infoPanel');
+            const which = infoPanelIdx % 3;
+            if (which === 0) {
+                const parts = CLOCK_CITIES.map(c => {
+                    const t = new Intl.DateTimeFormat('fr-FR', {
+                        hour: '2-digit', minute: '2-digit', timeZone: c.tz
+                    }).format(new Date());
+                    return `${c.label} <b>${t}</b>`;
+                });
+                el.innerHTML = parts.join('&nbsp;&nbsp;•&nbsp;&nbsp;');
+            } else if (which === 1) {
+                const t = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit' }).format(new Date());
+                el.innerHTML = `<b>${count}</b> dépêches en direct &nbsp;•&nbsp; dernière mise à jour&nbsp;<b>${t}</b>`;
+            } else {
+                el.innerHTML = `Sources suivies : <b>Le Canard enchaîné</b>, <b>CNews</b>, <b>France Info</b>`;
+            }
+            infoPanelIdx++;
+        }
+
+        // ---------- ticker: scrolling headlines + periodic engagement prompt ----------
+        function updateTickerContent() {
+            const track = document.getElementById('tickerTrack');
+            const items = cardMeta.filter(m => m && m.body).map(m => m.body);
+            track.textContent = items.length
+                ? items.join('   •   ')
+                : 'Dépêches en cours de mise à jour...';
+        }
+        function showEngagementPrompt() {
+            const ticker = document.getElementById('ticker');
+            const track = document.getElementById('tickerTrack');
+            ticker.classList.add('engagement');
+            track.textContent = '💬 Dites-nous ce que vous en pensez en commentaire !';
+            setTimeout(() => {
+                ticker.classList.remove('engagement');
+                updateTickerContent();
+            }, ENGAGEMENT_SHOW_MS);
+        }
+
+        // ---------- data refresh ----------
+        async function checkForUpdates() {
+            try {
+                const [totalRes, cardsRes] = await Promise.all([
+                    fetch('total.json?t=' + Date.now()),
+                    fetch('cards.json?t=' + Date.now())
+                ]);
+                const data = await totalRes.json();
+                if (cardsRes.ok) {
+                    const cardsData = await cardsRes.json();
+                    cardMeta = cardsData.items || [];
+                }
+                if (data.count && data.count !== count) {
+                    console.log(`Nouveau contenu détecté (${data.count} cartes), rechargement du diaporama...`);
+                    initStage(data.count);
+                } else {
+                    updateTickerContent();
+                    updatePopupForCurrentSlide();
+                }
+            } catch (e) {
+                console.error("En attente des données...", e);
+            }
+        }
+
+        async function init() {
+            setStatusLoading();
+            tryUnlockAudio();
+            renderInfoPanel();
+            setInterval(renderInfoPanel, INFO_ROTATE_MS);
+            setInterval(showEngagementPrompt, ENGAGEMENT_INTERVAL_MS);
+            await checkForUpdates();
+            setInterval(checkForUpdates, REFRESH_MS);
+        }
+
+        init();
+    </script>
+</body>
+</html>
