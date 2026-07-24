@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="fr" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <!-- No external fonts / no CDN calls anywhere in this file: everything
+         below uses the OS's built-in monospace + sans stacks so the page
+         renders identically with zero network access (kiosk / signage boxes
+         often run with no internet, or a metered one that must not be
+         spent on webfont requests). -->
+    <style>
+        :root {
+            /* ---- "dark room command center" palette ---- */
+            --bg-0:      #030604;
+            --bg-1:      #060b08;
+            --panel:     #050a07;
+            --grid-line: rgba(0, 255, 140, 0.05);
+            --green:     #39ff8c;
+            --green-dim: #1c9955;
+            --green-glow: rgba(57, 255, 140, 0.55);
+            --cyan:      #4de3ff;
+            --amber:     #ffb63c;
+            --alert:     #ff3b3b;
+            --text-main: #d9ffe9;
+            --text-dim:  #7fb99a;
+            --font-mono: ui-monospace, 'Cascadia Mono', 'SFMono-Regular', Consolas,
+                         'Liberation Mono', Menlo, monospace;
+            --font-sans: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        html, body {
+            margin: 0;
+            height: 100vh;
+            height: 100dvh;
+            width: 100vw;
+            overflow: hidden;
+            background: var(--bg-0);
+            font-family: var(--font-mono);
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* static background layer — dark server-room gradient, no red panic wash */
+        #bg {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            background:
+                radial-gradient(ellipse at 50% 0%, rgba(20, 60, 40, 0.35) 0%, transparent 55%),
+                linear-gradient(180deg, var(--bg-1) 0%, #010302 100%);
+        }
+
+        /* CRT scanline overlay — subtle, purely decorative */
+        #scanlines {
+            position: fixed;
+            inset: 0;
+            z-index: 1;
+            pointer-events: none;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0) 0px,
+                rgba(0, 0, 0, 0) 2px,
+                rgba(0, 255, 140, 0.035) 3px,
+                rgba(0, 0, 0, 0) 4px
+            );
+            mix-blend-mode: screen;
+        }
+
+        /* thin animated data-stripe down each side — replaces the old
+           red/black hazard marquee with a terminal-esque scan bar */
+        body::before, body::after {
+            content: "";
+            position: fixed;
+            top: 0;
+            bottom: 0;
+            width: 6px;
+            background: repeating-linear-gradient(
+                180deg,
+                var(--green) 0px, var(--green) 14px,
+                transparent 14px, transparent 34px
+            );
+            opacity: 0.5;
+            z-index: 1;
+            animation: stripesMove 2.6s linear infinite;
+        }
+        body::before { left: 0; }
+        body::after  { right: 0; animation-direction: reverse; }
+
+        @keyframes stripesMove {
+            from { background-position: 0 0; }
+            to   { background-position: 0 68px; }
+        }
+
+        /* ================= HEADER ================= */
+        #header {
+            position: relative;
+            flex: 0 0 auto;
+            z-index: 5;
+            text-align: center;
+            padding: clamp(14px, 3.5vh, 42px) 16px 6px;
+            pointer-events: none;
+        }
+        #header .title {
+            font-family: var(--font-mono);
+            font-size: clamp(1.3rem, 3.4vh, 2.3rem);
+            font-weight: 700;
+            color: var(--green);
+            text-shadow: 0 0 10px var(--green-glow), 0 0 26px rgba(57,255,140,0.25);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+        #header .title::before { content: "[ "; color: var(--text-dim); }
+        #header .title::after  { content: " ]"; color: var(--text-dim); }
+        #header .status {
+            margin-top: 6px;
+            font-size: clamp(0.85rem, 1.8vh, 1.05rem);
+            font-weight: 600;
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            letter-spacing: 0.5px;
+        }
+        .live-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--alert);
+            box-shadow: 0 0 8px var(--alert);
+            animation: dotPulse 1.4s ease-in-out infinite;
+        }
+        @keyframes dotPulse {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0.35; }
+        }
+
+        /* ================= INFO STRIP (rotating panels) ================= */
+        #infoStrip {
+            position: relative;
+            flex: 0 0 auto;
+            z-index: 5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: clamp(28px, 4.5vh, 46px);
+            margin: 0 auto 4px;
+            width: 88%;
+            max-width: 1050px;
+            pointer-events: none;
+            border-top: 1px solid rgba(57,255,140,0.15);
+            border-bottom: 1px solid rgba(57,255,140,0.15);
+        }
+        #infoStrip .info-panel {
+            font-family: var(--font-mono);
+            font-weight: 600;
+            font-size: clamp(0.8rem, 1.7vh, 1.02rem);
+            color: var(--text-dim);
+            text-align: center;
+            letter-spacing: 0.3px;
+        }
+        #infoStrip .info-panel b {
+            color: var(--amber);
+            font-weight: 700;
+        }
+        #infoStrip .info-panel .src {
+            color: var(--cyan);
+            font-weight: 700;
+        }
+
+        /* ================= STAGE (cards + popup) ================= */
+        #stage {
+            position: relative;
+            flex: 1 1 auto;
+            min-height: 0;
+            z-index: 2;
+            perspective: 2200px;
+        }
+
+        .card-slot {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 86%;
+            height: 92%;
+            max-width: 1050px;
+            max-height: 900px;
+            overflow: hidden;
+            transform: translate(-50%, -50%);
+        }
+
+        .page {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            background: var(--panel);
+            border: 1px solid rgba(57,255,140,0.35);
+            border-radius: 6px;
+            box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 0 40px rgba(0,0,0,0.7);
+            transform-style: preserve-3d;
+            transform-origin: right center;
+            transform: rotateY(0deg);
+            transition: transform 1s cubic-bezier(.45,.05,.55,.95), opacity .5s ease-in .5s;
+            backface-visibility: hidden;
+        }
+        .page.notransition { transition: none !important; }
+
+        /* terminal-window title bar on top of every card */
+        .page .term-bar {
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 26px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 0 10px;
+            background: linear-gradient(180deg, #0b1710, #060c08);
+            border-bottom: 1px solid rgba(57,255,140,0.25);
+            z-index: 2;
+            box-sizing: border-box;
+        }
+        .page .term-bar .dot { width: 8px; height: 8px; border-radius: 50%; opacity: 0.8; }
+        .page .term-bar .dot:nth-child(1) { background: var(--alert); }
+        .page .term-bar .dot:nth-child(2) { background: var(--amber); }
+        .page .term-bar .dot:nth-child(3) { background: var(--green); }
+        .page .term-bar .term-label {
+            margin-left: 8px;
+            font-size: 0.7rem;
+            color: var(--text-dim);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .page img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            padding-top: 26px;
+            box-sizing: border-box;
+            transform-origin: center center;
+            filter: saturate(0.9) contrast(1.05);
+        }
+
+        /* text-only summary screen — replaces the image for the "summary"
+           phase of a captioned card. Never a screenshot: reduces exposure
+           time of the original press image and puts the emphasis on the
+           reformatted text + mandatory source citation instead. */
+        .summary-panel {
+            display: none;
+            width: 100%;
+            height: 100%;
+            padding-top: 26px;
+            box-sizing: border-box;
+            background: linear-gradient(160deg, #061b0f 0%, #020805 100%);
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: left;
+            gap: 18px;
+        }
+        .summary-panel .sp-inner {
+            width: 84%;
+            max-width: 820px;
+        }
+        .summary-panel .sp-tag {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--green-dim);
+            margin-bottom: 10px;
+        }
+        .summary-panel .sp-tag::before { content: "// "; }
+        .summary-panel .sp-body {
+            font-family: var(--font-mono);
+            font-weight: 500;
+            font-size: clamp(1.1rem, 2.6vh, 1.7rem);
+            line-height: 1.5;
+            color: var(--text-main);
+        }
+        .summary-panel .sp-source {
+            margin-top: 18px;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            font-size: clamp(0.85rem, 1.6vh, 1.05rem);
+            letter-spacing: 0.4px;
+            color: var(--cyan);
+        }
+        .summary-panel .sp-date {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            color: var(--amber);
+            margin-top: 4px;
+        }
+
+        .page .sheen {
+            position: absolute;
+            inset: 0;
+            border-radius: 6px;
+            background: linear-gradient(100deg, transparent 30%, rgba(57,255,140,0.25) 50%, transparent 70%);
+            opacity: 0;
+            pointer-events: none;
+        }
+        .page.folding .sheen {
+            opacity: 1;
+            animation: sheenSweep 1s ease-in-out;
+        }
+        @keyframes sheenSweep {
+            from { transform: translateX(-100%); }
+            to   { transform: translateX(100%); }
+        }
+        .page.folding {
+            transform: rotateY(-150deg);
+            opacity: 0;
+        }
+
+        /* small popup: reformulated headline shown above wide/short images
+           during their image-phase only. Deliberately distinct text from
+           the summary screen (see extractCaption in capture.js) — never
+           the same string twice. */
+        .card-popup {
+            position: absolute;
+            left: 50%;
+            top: 0;
+            height: 0;
+            width: 86%;
+            max-width: 1050px;
+            box-sizing: border-box;
+            padding: 12px 20px;
+            border-radius: 4px;
+            background: linear-gradient(180deg, #061b10, #020805);
+            border: 1px solid var(--green-dim);
+            box-shadow: 0 0 18px rgba(57,255,140,0.25), 0 8px 24px rgba(0,0,0,0.6);
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(-50%) scale(0.96);
+            transition: opacity .4s ease, transform .4s ease;
+            z-index: 6;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .card-popup.visible {
+            opacity: 1;
+            transform: translateX(-50%) scale(1);
+        }
+        .card-popup .cp-body {
+            font-family: var(--font-mono);
+            font-weight: 600;
+            font-size: 1.3rem;
+            line-height: 1.4;
+            color: var(--text-main);
+        }
+        .card-popup .cp-body::before { content: "> "; color: var(--green); }
+        .card-popup .cp-date {
+            margin-top: 8px;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            font-size: 0.9rem;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--amber);
+        }
+
+        /* ================= TICKER (bottom band) ================= */
+        #ticker {
+            position: relative;
+            flex: 0 0 auto;
+            z-index: 5;
+            height: clamp(32px, 5.5vh, 50px);
+            margin-top: 4px;
+            background: linear-gradient(180deg, #061109, #020604);
+            border-top: 1px solid var(--green-dim);
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+        }
+        #ticker::before {
+            content: "›";
+            flex: 0 0 auto;
+            color: var(--green);
+            font-family: var(--font-mono);
+            font-weight: 700;
+            font-size: clamp(1rem, 2.2vh, 1.3rem);
+            padding: 0 10px 0 14px;
+            text-shadow: 0 0 8px var(--green-glow);
+        }
+        #ticker .ticker-track {
+            display: inline-block;
+            white-space: nowrap;
+            font-family: var(--font-mono);
+            font-weight: 500;
+            font-size: clamp(0.85rem, 2vh, 1.1rem);
+            color: var(--text-main);
+            padding-left: 100%;
+            will-change: transform;
+            animation-name: tickerScroll;
+            animation-timing-function: linear;
+            animation-iteration-count: infinite;
+            animation-duration: 40s; /* overridden dynamically in JS to match content length */
+        }
+        @keyframes tickerScroll {
+            from { transform: translateX(0); }
+            to   { transform: translateX(-100%); }
+        }
+        #ticker.engagement {
+            border-top-color: var(--cyan);
+        }
+        #ticker.engagement .ticker-track {
+            color: #eaffff;
+            font-weight: 700;
+        }
+        #ticker.engagement::before { color: var(--cyan); text-shadow: 0 0 8px rgba(77,227,255,0.6); }
+    </style>
+</head>
+<body>
+    <div id="bg"></div>
+    <div id="scanlines"></div>
+
+    <div id="header">
+        <div class="title">Dépêches en direct</div>
+        <div class="status" id="status">Chargement...</div>
+    </div>
+
+    <div id="infoStrip">
+        <div class="info-panel" id="infoPanel"></div>
+    </div>
+
+    <div id="stage">
+        <div class="card-slot" id="slotA">
+            <div class="page" id="pageA">
+                <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-label">feed://article</span></div>
+                <img id="imgA" alt="">
+                <div class="summary-panel" id="summaryA">
+                    <div class="sp-inner">
+                        <div class="sp-tag">résumé</div>
+                        <div class="sp-body" id="spBodyA"></div>
+                        <div class="sp-source" id="spSourceA"></div>
+                        <div class="sp-date" id="spDateA"></div>
+                    </div>
+                </div>
+                <div class="sheen"></div>
+            </div>
+        </div>
+        <div class="card-slot" id="slotB">
+            <div class="page" id="pageB">
+                <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="term-label">feed://article</span></div>
+                <img id="imgB" alt="">
+                <div class="summary-panel" id="summaryB">
+                    <div class="sp-inner">
+                        <div class="sp-tag">résumé</div>
+                        <div class="sp-body" id="spBodyB"></div>
+                        <div class="sp-source" id="spSourceB"></div>
+                        <div class="sp-date" id="spDateB"></div>
+                    </div>
+                </div>
+                <div class="sheen"></div>
+            </div>
+        </div>
+        <div class="card-popup" id="cardPopup">
+            <div class="cp-body" id="cpBody"></div>
+            <div class="cp-date" id="cpDate"></div>
+        </div>
+    </div>
+
+    <div id="ticker">
+        <div class="ticker-track" id="tickerTrack">Chargement des dépêches...</div>
+    </div>
+
+    <script>
+        // ---------- tunables ----------
+        const FOLD_MS = 1000;                 // must match the CSS transition duration
+        const REFRESH_MS = 5 * 60 * 1000;     // how often to check for freshly captured cards
+        const IMAGE_DUR_WITH_SUMMARY = 5000;  // image phase, when a summary screen follows
+        const SUMMARY_DUR = 15000;            // text summary screen duration
+        const IMAGE_DUR_NO_SUMMARY = 20000;   // manual photos / no caption: flat display time
+        const WIDE_RATIO_THRESHOLD = 3.0;     // above this, the small popup is used during image phase
+        const INFO_ROTATE_MS = 5000;          // info-strip panel rotation
+        const ENGAGEMENT_INTERVAL_MS = 2 * 60 * 1000; // comment-prompt cadence
+        const ENGAGEMENT_SHOW_MS = 10000;     // how long the prompt replaces the ticker
+        const TICKER_PX_PER_SEC = 90;         // constant scroll speed, independent of text length
+        const TICKER_MIN_SEC = 12;            // floor so very short text doesn't whip past instantly
+
+        // ---------- state ----------
+        let count = 0;
+        let cardMeta = [];       // [{title,summary,date,source} | null] per card, from cards.json
+        let playlist = [];       // [{type:'image'|'summary', idx, dur}]
+        let playIdx = 0;
+        let frontIsA = true;
+        let slideTimer = null;
+        let audioCtx = null;
+        let soundVariant = 0;
+
+        function urlFor(i, ts) {
+            return `card_${i}.png?t=${ts}`;
+        }
+
+        // ---------- header status ----------
+        function setStatusLoading() {
+            document.getElementById('status').textContent = 'Chargement...';
+        }
+        function setStatusLive(n) {
+            document.getElementById('status').innerHTML =
+                `<span class="live-dot"></span> EN DIRECT — ${n} dépêches`;
+        }
+
+        // ---------- transition sounds: 3 distinct variants, cycled ---------
+        function playTransitionSound() {
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+                if (audioCtx.state !== 'running') return;
+
+                const now = audioCtx.currentTime;
+                const variant = soundVariant % 3;
+                soundVariant++;
+
+                function tone(freq, start, dur, type, peak) {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = type;
+                    osc.frequency.value = freq;
+                    gain.gain.setValueAtTime(0.0001, now + start);
+                    gain.gain.exponentialRampToValueAtTime(peak, now + start + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(now + start);
+                    osc.stop(now + start + dur + 0.02);
+                }
+
+                if (variant === 0) {
+                    tone(783.99, 0, 0.22, 'triangle', 0.14); // single soft G5
+                } else if (variant === 1) {
+                    tone(659.25, 0, 0.11, 'sine', 0.12);      // quick two-note "pip-pip"
+                    tone(880.00, 0.10, 0.14, 'sine', 0.12);
+                } else {
+                    tone(1046.5, 0, 0.10, 'triangle', 0.11);  // soft descending sweep
+                    tone(830.61, 0.09, 0.10, 'triangle', 0.10);
+                    tone(659.25, 0.18, 0.16, 'triangle', 0.09);
+                }
+            } catch (e) {
+                console.warn('Son de transition indisponible :', e.message);
+            }
+        }
+        function tryUnlockAudio() {
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+            } catch (e) { /* ignore */ }
+        }
+        ['click', 'touchstart', 'keydown', 'pointerdown'].forEach(evt =>
+            document.addEventListener(evt, tryUnlockAudio, { passive: true })
+        );
+        document.addEventListener('visibilitychange', tryUnlockAudio);
+
+        // ---------- small popup (reformulated headline, image-phase only) ----------
+        const POPUP_MARGIN = 10;
+        function positionPopup() {
+            const stageRect = document.getElementById('stage').getBoundingClientRect();
+            const slotRect = document.getElementById('slotA').getBoundingClientRect();
+            const gap = slotRect.top - stageRect.top;
+            const popup = document.getElementById('cardPopup');
+            popup.style.top = POPUP_MARGIN + 'px';
+            popup.style.height = Math.max(gap - POPUP_MARGIN * 2, 30) + 'px';
+        }
+        const POPUP_MAX_FONT = 1.4, POPUP_MIN_FONT = 0.85, POPUP_FONT_STEP = 0.08;
+        function fitPopupText() {
+            const popup = document.getElementById('cardPopup');
+            const body = document.getElementById('cpBody');
+            let size = POPUP_MAX_FONT;
+            body.style.fontSize = size + 'rem';
+            let guard = 0;
+            while (popup.scrollHeight > popup.clientHeight && size > POPUP_MIN_FONT && guard < 30) {
+                size = Math.max(size - POPUP_FONT_STEP, POPUP_MIN_FONT);
+                body.style.fontSize = size + 'rem';
+                guard++;
+            }
+        }
+        function updatePopupForCurrentSlide() {
+            const slide = playlist[playIdx];
+            const popup = document.getElementById('cardPopup');
+            if (!slide) { popup.classList.remove('visible'); return; }
+            const meta = cardMeta[slide.idx];
+            const frontImg = document.getElementById(frontIsA ? 'imgA' : 'imgB');
+            const isWide = frontImg.complete && frontImg.naturalWidth > 0 &&
+                           (frontImg.naturalWidth / frontImg.naturalHeight) > WIDE_RATIO_THRESHOLD;
+            if (slide.type === 'image' && isWide && meta && meta.title) {
+                positionPopup();
+                document.getElementById('cpBody').textContent = meta.title;
+                document.getElementById('cpDate').textContent = meta.date ? `Publié le ${meta.date}` : '';
+                fitPopupText();
+                popup.classList.add('visible');
+            } else {
+                popup.classList.remove('visible');
+            }
+        }
+        window.addEventListener('resize', () => { positionPopup(); fitPopupText(); });
+
+        // ---------- playlist: image-only OR image+summary per card ----------
+        function buildPlaylist(n) {
+            const list = [];
+            for (let i = 0; i < n; i++) {
+                const meta = cardMeta[i];
+                if (meta && meta.summary) {
+                    list.push({ type: 'image', idx: i, dur: IMAGE_DUR_WITH_SUMMARY });
+                    list.push({ type: 'summary', idx: i, dur: SUMMARY_DUR });
+                } else {
+                    list.push({ type: 'image', idx: i, dur: IMAGE_DUR_NO_SUMMARY });
+                }
+            }
+            return list;
+        }
+
+        function renderSlide(slotLetter, slide, ts) {
+            const img = document.getElementById('img' + slotLetter);
+            const summary = document.getElementById('summary' + slotLetter);
+            if (!slide) { img.style.display = 'none'; summary.style.display = 'none'; return; }
+            if (slide.type === 'image') {
+                img.src = urlFor(slide.idx, ts || Date.now());
+                img.style.display = 'block';
+                summary.style.display = 'none';
+            } else {
+                const meta = cardMeta[slide.idx] || {};
+                document.getElementById('spBody' + slotLetter).textContent = meta.summary || '';
+                document.getElementById('spSource' + slotLetter).textContent =
+                    meta.source ? `Source : ${meta.source}` : '';
+                document.getElementById('spDate' + slotLetter).textContent =
+                    meta.date ? `Publié le ${meta.date}` : '';
+                img.style.display = 'none';
+                summary.style.display = 'flex';
+            }
+        }
+
+        function initStage(newCount) {
+            count = newCount;
+            playlist = buildPlaylist(count);
+            playIdx = 0;
+            frontIsA = true;
+            const ts = Date.now();
+
+            renderSlide('A', playlist[0], ts);
+            renderSlide('B', playlist[1] || playlist[0], ts);
+
+            const pageA = document.getElementById('pageA');
+            const pageB = document.getElementById('pageB');
+            [pageA, pageB].forEach(p => {
+                p.classList.add('notransition');
+                p.classList.remove('folding');
+            });
+            void pageA.offsetWidth;
+            [pageA, pageB].forEach(p => p.classList.remove('notransition'));
+
+            document.getElementById('slotA').style.zIndex = 3;
+            document.getElementById('slotB').style.zIndex = 2;
+
+            setStatusLive(count);
+            updateTickerContent();
+            updatePopupForCurrentSlide();
+            scheduleNextSlide();
+        }
+
+        function scheduleNextSlide() {
+            if (slideTimer) clearTimeout(slideTimer);
+            const slide = playlist[playIdx];
+            const dur = slide ? slide.dur : 16000;
+            slideTimer = setTimeout(advanceSlide, dur);
+        }
+
+        function advanceSlide() {
+            if (playlist.length === 0) return;
+            const frontId = frontIsA ? 'A' : 'B';
+            const backId  = frontIsA ? 'B' : 'A';
+            const frontPage = document.getElementById(`page${frontId}`);
+            const frontSlot = document.getElementById(`slot${frontId}`);
+            const backSlot  = document.getElementById(`slot${backId}`);
+
+            frontPage.classList.add('folding');
+            document.getElementById('cardPopup').classList.remove('visible');
+            playTransitionSound();
+
+            setTimeout(() => {
+                frontPage.classList.add('notransition');
+                frontPage.classList.remove('folding');
+                void frontPage.offsetWidth;
+                frontPage.classList.remove('notransition');
+
+                frontSlot.style.zIndex = 2;
+                backSlot.style.zIndex = 3;
+
+                playIdx = (playIdx + 1) % playlist.length;
+                const preloadIdx = (playIdx + 1) % playlist.length;
+                renderSlide(frontId, playlist[preloadIdx], Date.now());
+
+                frontIsA = !frontIsA;
+                updatePopupForCurrentSlide();
+                scheduleNextSlide();
+            }, FOLD_MS);
+        }
+
+        // ---------- info strip: rotates world clock / live stats / sources ----------
+        const CLOCK_CITIES = [
+            { label: 'Paris', tz: 'Europe/Paris' },
+            { label: 'Bruxelles', tz: 'Europe/Brussels' },
+            { label: 'Genève', tz: 'Europe/Zurich' },
+            { label: 'Monaco', tz: 'Europe/Monaco' }
+        ];
+        let infoPanelIdx = 0;
+        function renderInfoPanel() {
+            const el = document.getElementById('infoPanel');
+            const which = infoPanelIdx % 3;
+            if (which === 0) {
+                const parts = CLOCK_CITIES.map(c => {
+                    const t = new Intl.DateTimeFormat('fr-FR', {
+                        hour: '2-digit', minute: '2-digit', timeZone: c.tz
+                    }).format(new Date());
+                    return `${c.label} <b>${t}</b>`;
+                });
+                el.innerHTML = parts.join('&nbsp;&nbsp;•&nbsp;&nbsp;');
+            } else if (which === 1) {
+                const t = new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit' }).format(new Date());
+                el.innerHTML = `<b>${count}</b> dépêches en direct &nbsp;•&nbsp; dernière mise à jour&nbsp;<b>${t}</b>`;
+            } else {
+                el.innerHTML = `Sources suivies : <span class="src">Le Canard enchaîné</span>, <span class="src">CNews</span>, <span class="src">France Info</span>`;
+            }
+            infoPanelIdx++;
+        }
+
+        // ---------- ticker: scrolling headlines + periodic engagement prompt ----------
+        // Speed is driven off the rendered text width rather than a fixed
+        // animation-duration, so a short ticker and a long one both scroll
+        // past at the same, readable pace instead of the short one whipping
+        // by. The animation is force-restarted (remove class -> reflow ->
+        // re-add) any time the text or the css variant changes, otherwise a
+        // browser will just remap whatever fraction of the old animation had
+        // already played onto the new duration, which is what made the
+        // "leave a comment" prompt look like it was flying past.
+        function runTickerAnimation(track) {
+            track.style.animation = 'none';
+            void track.offsetWidth; // force reflow
+            const width = track.scrollWidth || 1;
+            const seconds = Math.max(TICKER_MIN_SEC, width / TICKER_PX_PER_SEC);
+            track.style.animation = `tickerScroll ${seconds}s linear infinite`;
+        }
+
+        function truncateForTicker(s, max) {
+            if (!s) return '';
+            return s.length > max ? s.slice(0, max).trim() + '…' : s;
+        }
+        function updateTickerContent() {
+            const track = document.getElementById('tickerTrack');
+            // title is deliberately just a metadata tag (category/source) —
+            // never article wording — so the ticker pairs it with a snippet
+            // of the real summary to stay informative instead of just
+            // repeating short tags back to back.
+            const items = cardMeta
+                .filter(m => m && (m.title || m.summary))
+                .map(m => {
+                    const snippet = truncateForTicker(m.summary, 100);
+                    return m.title && snippet ? `${m.title} : ${snippet}` : (m.title || snippet);
+                });
+            track.textContent = items.length
+                ? items.join('   •   ')
+                : 'Dépêches en cours de mise à jour...';
+            runTickerAnimation(track);
+        }
+        function showEngagementPrompt() {
+            const ticker = document.getElementById('ticker');
+            const track = document.getElementById('tickerTrack');
+            ticker.classList.add('engagement');
+            track.textContent = '💬 Dites-nous ce que vous en pensez en commentaire !';
+            runTickerAnimation(track);
+            setTimeout(() => {
+                ticker.classList.remove('engagement');
+                updateTickerContent();
+            }, ENGAGEMENT_SHOW_MS);
+        }
+
+        // ---------- data refresh ----------
+        async function checkForUpdates() {
+            let data = null;
+            try {
+                const totalRes = await fetch('total.json?t=' + Date.now());
+                data = await totalRes.json();
+            } catch (e) {
+                console.error("En attente des données (total.json)...", e);
+                return;
+            }
+            try {
+                const cardsRes = await fetch('cards.json?t=' + Date.now());
+                if (cardsRes.ok) {
+                    const cardsData = await cardsRes.json();
+                    cardMeta = cardsData.items || [];
+                }
+            } catch (e) {
+                console.warn("cards.json indisponible, conservation des métadonnées précédentes", e);
+            }
+            if (data && data.count && data.count !== count) {
+                console.log(`Nouveau contenu détecté (${data.count} cartes), rechargement du diaporama...`);
+                initStage(data.count);
+            } else {
+                updateTickerContent();
+                updatePopupForCurrentSlide();
+            }
+        }
+
+        async function init() {
+            setStatusLoading();
+            tryUnlockAudio();
+            renderInfoPanel();
+            setInterval(renderInfoPanel, INFO_ROTATE_MS);
+            setInterval(showEngagementPrompt, ENGAGEMENT_INTERVAL_MS);
+            await checkForUpdates();
+            setInterval(checkForUpdates, REFRESH_MS);
+        }
+
+        init();
+    </script>
+</body>
+</html>
