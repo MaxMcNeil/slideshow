@@ -543,7 +543,7 @@ function extractCaption(rawInnerText, sourceLabel) {
     const sentences = splitIntoSentences(fullText);
     const headline = sentences[0] || fullText || category || '';
     let summary = sentences.length > 1 ? sentences.slice(1).join(' ').trim() : '';
-    if (summary.length > 380) summary = summary.slice(0, 380).trim() + '…';
+    if (summary.length > 380) summary = truncateCleanly(summary, 380);
     const hasRealSummary = !!summary;
 
     // title is filled in later by buildTitles(), and summary is
@@ -690,7 +690,7 @@ function localReword(headline, category) {
     while (words.length > 4 && fillers.has(words[0].toLowerCase())) words.shift();
 
     let core = words.join(' ');
-    if (core.length > 90) core = core.slice(0, 90).trim() + '…';
+    if (core.length > 90) core = truncateCleanly(core, 90);
 
     const tag = category && category.length > 0 && category.length <= 24 ? category : 'À la une';
     return `${tag} : ${core}`;
@@ -776,8 +776,29 @@ function extractRealSummaryFromHtml(html) {
         summary = paragraphs.slice(0, 2).join(' ');
     }
 
-    if (summary.length > 380) summary = summary.slice(0, 380).trim() + '…';
+    if (summary.length > 380) summary = truncateCleanly(summary, 380);
     return summary.trim();
+}
+
+// Cuts long text without slicing through the middle of a word or sentence.
+// Prefers the last sentence-ending punctuation within the limit; falls back
+// to the last whole word if no sentence boundary is close enough, and only
+// then appends "…" (a clean sentence end needs no ellipsis).
+function truncateCleanly(text, maxLen) {
+    if (text.length <= maxLen) return text;
+    const slice = text.slice(0, maxLen);
+
+    const lastSentenceEnd = Math.max(
+        slice.lastIndexOf('. '), slice.lastIndexOf('! '),
+        slice.lastIndexOf('? '), slice.lastIndexOf('… ')
+    );
+    if (lastSentenceEnd > maxLen * 0.4) {
+        return slice.slice(0, lastSentenceEnd + 1).trim();
+    }
+
+    const lastSpace = slice.lastIndexOf(' ');
+    const cut = lastSpace > maxLen * 0.4 ? slice.slice(0, lastSpace) : slice;
+    return cut.trim() + '…';
 }
 
 
