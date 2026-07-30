@@ -542,7 +542,7 @@ function extractCaption(rawInnerText, sourceLabel) {
     // source material for buildTitles(), never surfaced verbatim.
     const sentences = splitIntoSentences(fullText);
     const headline = sentences[0] || fullText || category || '';
-    let summary = sentences.length > 1 ? sentences.slice(1).join(' ').trim() : '';
+    let summary = sentences.length > 1 ? keepCompleteSentences(sentences.slice(1).join(' ').trim()) : '';
     if (summary.length > 380) summary = truncateCleanly(summary, 380);
     const hasRealSummary = !!summary;
 
@@ -756,14 +756,21 @@ function extractRealSummaryFromHtml(html) {
     const cheerio = require('cheerio');
     const $ = cheerio.load(html || '');
 
-    let summary =
+    let metaSummary =
         $('meta[property="og:description"]').attr('content') ||
         $('meta[name="description"]').attr('content') ||
         $('meta[name="twitter:description"]').attr('content') ||
         '';
-    summary = (summary || '').replace(/\s+/g, ' ').trim();
+    metaSummary = (metaSummary || '').replace(/\s+/g, ' ').trim();
 
-    if (!summary || summary.length < 40) {
+    // Many sites hard-truncate their OWN meta description (a common
+    // SEO-plugin default, e.g. cut at ~155 chars) and mark that cut with a
+    // trailing "…" or "...". That's a cut sentence, not a summary — so it's
+    // not accepted outright; body paragraphs are tried first instead.
+    const metaLooksTruncated = /(\.\.\.|…)\s*$/.test(metaSummary);
+    let summary = (metaSummary.length >= 40 && !metaLooksTruncated) ? metaSummary : '';
+
+    if (!summary) {
         const bodySelectors = ['article p', '.article-body p', '.article-content p', 'main p', 'p'];
         let paragraphs = [];
         for (const sel of bodySelectors) {
@@ -773,11 +780,41 @@ function extractRealSummaryFromHtml(html) {
                 .filter(t => t.length > 40 && !/cookie|abonn|publicit/i.test(t));
             if (paragraphs.length) break;
         }
-        summary = paragraphs.slice(0, 2).join(' ');
+        // Only keep paragraphs that are themselves complete sentences —
+        // gluing an incomplete lead fragment onto the next paragraph would
+        // just produce a run-on ("...durant cette Les pompiers...").
+        const completeParagraphs = paragraphs.filter(p => /[.!?…]\s*$/.test(p));
+        summary = completeParagraphs.slice(0, 2).join(' ');
     }
 
+    // Last resort: even a source-truncated meta description beats nothing.
+    if (!summary && metaSummary) summary = keepCompleteSentences(metaSummary) || metaSummary;
+
+    // A scraped teaser paragraph sometimes stops mid-sentence in the site's
+    // own markup (the rest is behind a "read more" link, not in this HTML).
+    // Drop that trailing incomplete fragment rather than show a sentence
+    // that just stops.
+    summary = keepCompleteSentences(summary);
+
     if (summary.length > 380) summary = truncateCleanly(summary, 380);
+    // Normalise any doubled-up ellipsis (source's own "…" plus a cut we made).
+    summary = summary.replace(/(\.\.\.|…)(\s*(\.\.\.|…))+/g, '…');
     return summary.trim();
+}
+
+// Drops a trailing fragment that doesn't actually end in sentence-ending
+// punctuation, keeping only the complete sentence(s) before it. If the
+// WHOLE text is a single fragment with no terminal punctuation anywhere
+// (a teaser cut by the site's own markup, no period to fall back before),
+// there's nothing complete to salvage — returns '' so the caller can try
+// another paragraph instead of showing a sentence that just stops.
+function keepCompleteSentences(text) {
+    const sentences = splitIntoSentences(text);
+    if (sentences.length === 0) return '';
+    const last = sentences[sentences.length - 1];
+    const lastIsComplete = /[.!?…]\s*$/.test(last);
+    if (sentences.length === 1) return lastIsComplete ? text : '';
+    return lastIsComplete ? text : sentences.slice(0, -1).join(' ').trim();
 }
 
 // Cuts long text without slicing through the middle of a word or sentence.
