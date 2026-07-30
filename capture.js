@@ -2,6 +2,7 @@ const { chromium } = require('playwright');
 const sharp = require('sharp');
 const fs = require('fs');
 const path = require('path');
+const { renderCardHtml, CARD_WIDTH, CARD_HEIGHT } = require('./card-template');
 
 // Capture order == display order. Canard Enchaîné's 3 sections first, then
 // CNews, then Le Parisien — matches the roadmap order.
@@ -447,16 +448,6 @@ async function ingestManualImages() {
 
 
 
-async function saveTrimmedScreenshot(el, outPath) {
-    const buffer = await el.screenshot();
-    try {
-        await sharp(buffer).trim({ background: '#ffffff', threshold: 12 }).toFile(outPath);
-    } catch (e) {
-        console.warn(`  ⚠ trim failed for ${outPath}, saving untrimmed: ${e.message}`);
-        fs.writeFileSync(outPath, buffer);
-    }
-}
-
 function cacheBustedUrl(url) {
     const sep = url.includes('?') ? '&' : '?';
     return `${url}${sep}_cb=${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -510,8 +501,8 @@ function splitIntoSentences(text) {
 //          (An earlier version built this purely from metadata (category/
 //          source) to avoid ever repeating the headline. That produced
 //          cards with no real title at all — e.g. single-line CNews cards
-//          fell back to showing just "CNews". buildLocalTitles() below is
-//          what turns the raw headline captured here into that reworded
+//          fell back to showing just "CNews". buildTitles() below is
+//          what turns the raw headline captured here into that reworded (Qwen/Ollama, with local fallback)
 //          title, for every card without exception.)
 // summary: a REAL summary of the actual article, fetched by
 //          fetchRealSummaries() from the article's own page (its
@@ -548,35 +539,113 @@ function extractCaption(rawInnerText, sourceLabel) {
         .join(' ').replace(/\s+/g, ' ').trim();
 
     // First sentence of fullText is the raw headline — kept here only as
-    // source material for buildLocalTitles(), never surfaced verbatim.
+    // source material for buildTitles(), never surfaced verbatim.
     const sentences = splitIntoSentences(fullText);
     const headline = sentences[0] || fullText || category || '';
     let summary = sentences.length > 1 ? sentences.slice(1).join(' ').trim() : '';
     if (summary.length > 380) summary = summary.slice(0, 380).trim() + '…';
     const hasRealSummary = !!summary;
 
-    // title is filled in later by buildLocalTitles(), and summary is
+    // title is filled in later by buildTitles(), and summary is
     // upgraded to the real article summary by fetchRealSummaries() —
     // both run once every card on every source has been collected.
     return { headline, category, summary, hasRealSummary, date, source: sourceLabel };
 }
 
-// ---------- titles (every card, always reworded, never copied — 100% local) ----------
+// ---------- titles (every card, reworded by a real editorial rewrite — Qwen via Ollama) ----------
 // Turns each card's raw headline into a short, reworded title — same facts,
-// different wording — so the popup/ticker never just echoes the headline
-// that's already legible on the card screenshot, and never falls back to a
-// bare category or source label. Pure string manipulation, no network call,
-// no paid or rate-limited API of any kind.
-function buildLocalTitles(captions) {
-    for (const c of captions) {
-        if (!c || !c.headline) continue;
-        c.title = localReword(c.headline, c.category);
-        if (!c.summary) c.summary = c.title;
-        delete c.headline;
-        delete c.category;
+// different wording, AFP-dispatch style — so the popup/ticker never just
+// echoes the headline that's already legible on the card, and never falls
+// back to a bare category or source label. Every card gets one, no
+// exception: if the local Qwen model is unreachable or a single call fails
+// (CI runner not warmed up yet, model not pulled, timeout...), that card
+// falls back to localReword() below rather than being left without a title.
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3:8b';
+const OLLAMA_CALL_TIMEOUT_MS = 25000;
+// Hard ceiling on time spent waiting on the AI rewrite across ALL cards —
+// a CPU-only CI runner doing 50-80 sequential 8B calls can otherwise turn a
+// 4-hourly job into an hours-long one. Once the budget is spent, remaining
+// cards just use the local fallback (they still get a real, reworded title —
+// just not the AI-generated one).
+const OLLAMA_TOTAL_BUDGET_MS = 20 * 60 * 1000; // 20 min
+
+async function checkOllamaAvailable() {
+    const axios = require('axios');
+    try {
+        await axios.get(`${OLLAMA_URL}/api/tags`, { timeout: 3000 });
+        return true;
+    } catch (e) {
+        return false;
     }
 }
 
+async function rewriteHeadlineWithQwen(headline, category) {
+    const axios = require('axios');
+    const prompt =
+        `Tu es journaliste pour une dépêche d'actualité française, style AFP : ` +
+        `phrases courtes, factuelles, percutantes, sans familiarité ni sensationnalisme.\n` +
+        `Reformule ce titre en UNE SEULE phrase originale (20 mots maximum), en gardant ` +
+        `exactement les mêmes faits, sans en inventer ni en omettre.\n` +
+        `Réponds uniquement avec la phrase reformulée, sans guillemets ni préambule.\n\n` +
+        `Catégorie : ${category || 'Actualité'}\n` +
+        `Titre original : ${headline}`;
+
+    const res = await axios.post(`${OLLAMA_URL}/api/generate`, {
+        model: OLLAMA_MODEL,
+        prompt,
+        stream: false,
+        options: { temperature: 0.4, num_predict: 80 }
+    }, { timeout: OLLAMA_CALL_TIMEOUT_MS });
+
+    let text = ((res.data && res.data.response) || '').trim();
+    text = text.replace(/^[«"']+|[»"']+$/g, '').replace(/\s+/g, ' ').trim();
+    return text || null;
+}
+
+async function buildTitles(captions) {
+    const available = await checkOllamaAvailable();
+    if (!available) {
+        console.warn(`  ⚠ Ollama injoignable sur ${OLLAMA_URL} — repli local (reformulation par mots) pour toutes les cartes`);
+    } else {
+        console.log(`  🤖 Ollama disponible (${OLLAMA_MODEL}) — reformulation éditoriale en cours...`);
+    }
+
+    const startedAt = Date.now();
+    let aiOk = 0, aiFailed = 0, aiSkippedBudget = 0;
+
+    for (const c of captions) {
+        if (!c || !c.headline) continue;
+
+        let title = null;
+        const budgetLeft = OLLAMA_TOTAL_BUDGET_MS - (Date.now() - startedAt);
+        if (available && budgetLeft > 0) {
+            try {
+                title = await rewriteHeadlineWithQwen(c.headline, c.category);
+                if (title) aiOk++; else aiFailed++;
+            } catch (e) {
+                aiFailed++;
+                console.warn(`  ⚠ Qwen: échec reformulation ("${c.headline.slice(0, 40)}...") : ${e.message}`);
+            }
+        } else if (available) {
+            aiSkippedBudget++;
+        }
+
+        c.title = title || localReword(c.headline, c.category);
+        if (!c.summary) c.summary = c.title;
+        delete c.headline;
+        // category kept (not deleted): used as the kicker tag on the
+        // generated card image (see generateCardImages / card-template.js).
+    }
+
+    if (available) {
+        console.log(`  🤖 Reformulation IA : ${aiOk} ok, ${aiFailed} échec→repli local, ${aiSkippedBudget} budget temps dépassé→repli local`);
+    }
+}
+
+// Word-shuffling fallback — same facts, different wording, but pure string
+// manipulation (no model, no network). Used whenever the Qwen call above
+// isn't available or fails, so every card still gets a real title.
 function localReword(headline, category) {
     let words = headline.replace(/^[«"']+|[»"']+$/g, '').split(/\s+/).filter(Boolean);
     const fillers = new Set(['le', 'la', 'les', 'un', 'une', 'des', 'du', 'et', 'ce', 'cette', 'cet']);
@@ -674,6 +743,36 @@ function extractRealSummaryFromHtml(html) {
 }
 
 
+// ---------- generated card images (own design, built from facts only) ----------
+// Renders card_N.png for every scraped card from card-template.js — never a
+// screenshot of the source site. Runs after buildTitles()/
+// fetchRealSummaries() so the image can show the final title/date/source.
+// Manual photos (images/ folder, indices < startIndex) already have their
+// own card_N.png from ingestManualImages() and are skipped here.
+async function generateCardImages(browser, captions, startIndex) {
+    const page = await browser.newPage({ viewport: { width: CARD_WIDTH, height: CARD_HEIGHT } });
+    let n = 0;
+    for (let i = startIndex; i < captions.length; i++) {
+        const c = captions[i];
+        if (!c) continue;
+        try {
+            const html = renderCardHtml({
+                title: c.title || c.summary || '',
+                category: c.category,
+                source: c.source,
+                date: c.date
+            });
+            await page.setContent(html, { waitUntil: 'load' });
+            await page.screenshot({ path: `card_${i}.png` });
+            n++;
+        } catch (e) {
+            console.warn(`  ⚠ Carte ${i}: génération de l'image échouée : ${e.message}`);
+        }
+    }
+    await page.close();
+    console.log(`  🎨 ${n} carte(s) générée(s) (design maison, sans capture du site source)`);
+}
+
 async function main() {
     console.log("--- DÉBUT DE LA CAPTURE DES CARTES ---");
 
@@ -769,7 +868,6 @@ async function main() {
                     cardCaptions[count] = extractCaption(rawText, sourceDisplayName(source.name));
                     cardCaptions[count].href = href;
 
-                    await saveTrimmedScreenshot(el, `card_${count}.png`);
                     console.log(`✓ Carte ${count} capturée (${source.name} #${i})`);
                     count++;
                     cardsCaptured++;
@@ -791,8 +889,11 @@ async function main() {
 
     console.log('\n📖 Récupération de vrais résumés (lecture des articles sources)...');
     await fetchRealSummaries(cardCaptions);
-    console.log('\n🖋 Construction des titres (locale, toutes les cartes)...');
-    buildLocalTitles(cardCaptions);
+    console.log('\n🖋 Construction des titres (rewrite éditorial via Qwen/Ollama)...');
+    await buildTitles(cardCaptions);
+
+    console.log('\n🎨 Génération des cartes (design maison, plus de capture du site source)...');
+    await generateCardImages(browser, cardCaptions, manualCount);
 
     fs.writeFileSync('total.json', JSON.stringify({ count }));
     fs.writeFileSync('cards.json', JSON.stringify({ items: cardCaptions }));

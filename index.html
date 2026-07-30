@@ -168,6 +168,83 @@
             font-weight: 700;
         }
 
+        /* ================= BREAKING NEWS BAR ================= */
+        /* Only shown for a few seconds when a genuinely new dispatch lands
+           (see detectAndAnnounceNewItems in the script) — never on a loop,
+           never as decoration. Two intensities: a calmer "NOUVELLE DÉPÊCHE"
+           pulse for any fresh item, and a harder red "URGENT" flash when the
+           item's own category/title carries an urgent marker from the
+           source (see isUrgentItem). */
+        #breakingBar {
+            position: relative;
+            flex: 0 0 auto;
+            z-index: 7;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 10px 22px;
+            margin: 0 16px;
+            border-radius: 4px;
+            overflow: hidden;
+            transform-origin: top center;
+            transition: max-height .35s ease, opacity .35s ease, margin .35s ease, padding .35s ease;
+        }
+        #breakingBar.breaking-hidden {
+            max-height: 0;
+            opacity: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            margin-top: 0;
+            margin-bottom: 0;
+            pointer-events: none;
+        }
+        #breakingBar.breaking-visible {
+            max-height: 90px;
+        }
+        #breakingBar.mode-urgent {
+            background: linear-gradient(90deg, rgba(255,59,59,0.22), rgba(255,59,59,0.06));
+            border: 1px solid var(--alert);
+            box-shadow: 0 0 26px rgba(255,59,59,0.35);
+            animation: breakingFlash 0.9s steps(1) infinite;
+        }
+        #breakingBar.mode-new {
+            background: linear-gradient(90deg, rgba(57,255,140,0.16), rgba(57,255,140,0.04));
+            border: 1px solid var(--green-dim);
+            box-shadow: 0 0 18px rgba(57,255,140,0.2);
+        }
+        @keyframes breakingFlash {
+            0%, 49%   { background-color: rgba(255,59,59,0.28); }
+            50%, 100% { background-color: rgba(255,59,59,0.08); }
+        }
+        #breakingLabel {
+            flex: 0 0 auto;
+            font-family: var(--font-mono);
+            font-weight: 800;
+            font-size: clamp(0.95rem, 2vh, 1.2rem);
+            letter-spacing: 2px;
+            padding: 4px 10px;
+            border-radius: 3px;
+            white-space: nowrap;
+        }
+        .mode-urgent #breakingLabel {
+            background: var(--alert);
+            color: #1a0000;
+        }
+        .mode-new #breakingLabel {
+            background: var(--green);
+            color: #04150a;
+        }
+        #breakingText {
+            flex: 1 1 auto;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            font-size: clamp(0.9rem, 1.9vh, 1.15rem);
+            color: var(--text-main);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
         /* ================= STAGE (cards + popup) ================= */
         #stage {
             position: relative;
@@ -424,6 +501,11 @@
         <div class="status" id="status">Chargement...</div>
     </div>
 
+    <div id="breakingBar" class="breaking-hidden">
+        <div id="breakingLabel">URGENT</div>
+        <div id="breakingText"></div>
+    </div>
+
     <div id="infoStrip">
         <div class="info-panel" id="infoPanel"></div>
     </div>
@@ -492,6 +574,8 @@
         let slideTimer = null;
         let audioCtx = null;
         let soundVariant = 0;
+        let knownTitles = null;         // null until first load — no alert on the very first fetch
+        let breakingHideTimer = null;
 
         function urlFor(i, ts) {
             return `card_${i}.png?t=${ts}`;
@@ -506,7 +590,7 @@
                 `<span class="live-dot"></span> EN DIRECT — ${n} dépêches`;
         }
 
-        // ---------- transition sounds: 3 distinct variants, cycled ---------
+        // ---------- transition sounds: 4 distinct variants, cycled ---------
         function playTransitionSound() {
             try {
                 if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -514,7 +598,7 @@
                 if (audioCtx.state !== 'running') return;
 
                 const now = audioCtx.currentTime;
-                const variant = soundVariant % 3;
+                const variant = soundVariant % 4;
                 soundVariant++;
 
                 function tone(freq, start, dur, type, peak) {
@@ -536,13 +620,102 @@
                 } else if (variant === 1) {
                     tone(659.25, 0, 0.11, 'sine', 0.12);      // quick two-note "pip-pip"
                     tone(880.00, 0.10, 0.14, 'sine', 0.12);
-                } else {
+                } else if (variant === 2) {
                     tone(1046.5, 0, 0.10, 'triangle', 0.11);  // soft descending sweep
                     tone(830.61, 0.09, 0.10, 'triangle', 0.10);
                     tone(659.25, 0.18, 0.16, 'triangle', 0.09);
+                } else {
+                    playNoiseWhoosh(now, 0.32, 0.09); // filtered-noise whoosh, no pure tone
                 }
             } catch (e) {
                 console.warn('Son de transition indisponible :', e.message);
+            }
+        }
+
+        // Short filtered white-noise burst with a swept bandpass filter — a
+        // real "whoosh" rather than another oscillator tone. Shared by the
+        // transition cycle above and reusable for other cues.
+        function playNoiseWhoosh(startAt, dur, peak) {
+            const bufferSize = Math.ceil(audioCtx.sampleRate * dur);
+            const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+            const noise = audioCtx.createBufferSource();
+            noise.buffer = buffer;
+
+            const filter = audioCtx.createBiquadFilter();
+            filter.type = 'bandpass';
+            filter.Q.value = 0.9;
+            filter.frequency.setValueAtTime(300, startAt);
+            filter.frequency.exponentialRampToValueAtTime(3200, startAt + dur * 0.7);
+            filter.frequency.exponentialRampToValueAtTime(500, startAt + dur);
+
+            const gain = audioCtx.createGain();
+            gain.gain.setValueAtTime(0.0001, startAt);
+            gain.gain.exponentialRampToValueAtTime(peak, startAt + dur * 0.25);
+            gain.gain.exponentialRampToValueAtTime(0.0001, startAt + dur);
+
+            noise.connect(filter);
+            filter.connect(gain);
+            gain.connect(audioCtx.destination);
+            noise.start(startAt);
+            noise.stop(startAt + dur + 0.02);
+        }
+
+        // "Stinger d'ouverture de dépêche" — light rising two-note chime,
+        // played when a genuinely new (non-urgent) card lands.
+        function playDispatchStinger() {
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+                if (audioCtx.state !== 'running') return;
+                const now = audioCtx.currentTime;
+                [ [523.25, 0, 0.16, 0.13], [783.99, 0.09, 0.22, 0.15] ].forEach(([freq, start, dur, peak]) => {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'triangle';
+                    osc.frequency.value = freq;
+                    gain.gain.setValueAtTime(0.0001, now + start);
+                    gain.gain.exponentialRampToValueAtTime(peak, now + start + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + start + dur);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(now + start);
+                    osc.stop(now + start + dur + 0.02);
+                });
+            } catch (e) {
+                console.warn('Stinger de dépêche indisponible :', e.message);
+            }
+        }
+
+        // Distinct urgent alert — a real alarm pattern (alternating two
+        // tones), reserved for cards whose source marks them urgent. Never
+        // used for routine new content, so it keeps its meaning.
+        function playUrgentAlert() {
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+                if (audioCtx.state !== 'running') return;
+                const now = audioCtx.currentTime;
+                const pulses = 4;
+                for (let i = 0; i < pulses; i++) {
+                    const start = i * 0.22;
+                    const freq = i % 2 === 0 ? 932.33 : 739.99;
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'square';
+                    osc.frequency.value = freq;
+                    gain.gain.setValueAtTime(0.0001, now + start);
+                    gain.gain.exponentialRampToValueAtTime(0.11, now + start + 0.02);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + start + 0.18);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start(now + start);
+                    osc.stop(now + start + 0.2);
+                }
+            } catch (e) {
+                console.warn('Alerte urgente indisponible :', e.message);
             }
         }
         function tryUnlockAudio() {
@@ -778,6 +951,59 @@
             }, ENGAGEMENT_SHOW_MS);
         }
 
+        // ---------- breaking news bar: only for genuinely new dispatches ----------
+        const BREAKING_URGENT_MS = 7000;
+        const BREAKING_NEW_MS = 5000;
+        // Heuristic: a card counts as "urgent" only when the source itself
+        // marked it that way (its own category label, or a leading marker in
+        // the title) — never invented, since capture.js never adds this.
+        const URGENT_RE = /urgent|dernière minute|dernière-minute|en direct|alerte info/i;
+        function isUrgentItem(item) {
+            return URGENT_RE.test(item.category || '') || URGENT_RE.test(item.title || '');
+        }
+
+        function showBreakingBar(item, urgent) {
+            const bar = document.getElementById('breakingBar');
+            const label = document.getElementById('breakingLabel');
+            const text = document.getElementById('breakingText');
+
+            clearTimeout(breakingHideTimer);
+            bar.classList.remove('mode-urgent', 'mode-new');
+            bar.classList.add(urgent ? 'mode-urgent' : 'mode-new');
+            label.textContent = urgent ? 'URGENT' : 'NOUVELLE DÉPÊCHE';
+            text.textContent = item.title || item.summary || '';
+
+            bar.classList.remove('breaking-hidden');
+            bar.classList.add('breaking-visible');
+
+            if (urgent) playUrgentAlert(); else playDispatchStinger();
+
+            breakingHideTimer = setTimeout(() => {
+                bar.classList.remove('breaking-visible');
+                bar.classList.add('breaking-hidden');
+            }, urgent ? BREAKING_URGENT_MS : BREAKING_NEW_MS);
+        }
+
+        // Compares the incoming card list against what we've already shown a
+        // stinger for, by title. Only ever fires for cards not seen before —
+        // never on every refresh loop, and never on the very first load
+        // (that would just be "the whole slideshow is new").
+        function detectAndAnnounceNewItems(items) {
+            const currentTitles = new Set(items.filter(Boolean).map(m => m.title).filter(Boolean));
+
+            if (knownTitles === null) {
+                knownTitles = currentTitles;
+                return;
+            }
+
+            const freshItems = items.filter(m => m && m.title && !knownTitles.has(m.title));
+            knownTitles = currentTitles;
+            if (freshItems.length === 0) return;
+
+            const urgentItem = freshItems.find(isUrgentItem);
+            showBreakingBar(urgentItem || freshItems[0], !!urgentItem);
+        }
+
         // ---------- data refresh ----------
         async function checkForUpdates() {
             let data = null;
@@ -793,6 +1019,7 @@
                 if (cardsRes.ok) {
                     const cardsData = await cardsRes.json();
                     cardMeta = cardsData.items || [];
+                    detectAndAnnounceNewItems(cardMeta);
                 }
             } catch (e) {
                 console.warn("cards.json indisponible, conservation des métadonnées précédentes", e);
