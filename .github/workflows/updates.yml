@@ -8,10 +8,52 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      OLLAMA_URL: http://127.0.0.1:11434
+      OLLAMA_MODEL: qwen3:8b
+      # install.sh's systemd service stores models under
+      # /usr/share/ollama/.ollama/models (owned by a system "ollama" user) —
+      # NOT ~/.ollama/models, and it ignores env vars set in our own shell.
+      # We stop that service and run our own `ollama serve` instead, so this
+      # path (owned by the runner's own user) is the one actually used —
+      # and the one actually worth caching.
+      OLLAMA_MODELS: /home/runner/.ollama-models
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
         with: { node-version: '20' }
+
+      # ---- Qwen (Ollama) for the editorial rewrite ----
+      # The model weights (~5GB for qwen3:8b) are cached across runs so we
+      # don't re-download them every 4h — only the very first run (or a
+      # cache eviction) pays that cost. If Ollama fails to install/start/pull
+      # here, capture.js detects that itself and falls back to the local
+      # (non-AI) rewrite for every card — this job never fails because of it.
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+      - name: Stop the auto-started systemd service
+        # install.sh starts+enables its own "ollama" service on port 11434.
+        # We need our own instance instead, so OLLAMA_MODELS above actually
+        # takes effect (see comment on the env block).
+        run: |
+          sudo systemctl stop ollama 2>/dev/null || true
+          sudo systemctl disable ollama 2>/dev/null || true
+      - name: Cache Ollama models
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OLLAMA_MODELS }}
+          key: ollama-${{ env.OLLAMA_MODEL }}
+      - name: Start Ollama server
+        run: |
+          mkdir -p "$OLLAMA_MODELS"
+          nohup ollama serve > ollama.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:11434/api/tags > /dev/null && break
+            sleep 1
+          done
+      - name: Pull Qwen model
+        run: ollama pull "$OLLAMA_MODEL" || echo "⚠ pull failed — capture.js will fall back to the local rewrite"
+
       - run: npm install playwright cheerio axios sharp
       - run: npx playwright install chromium --with-deps
       - run: rm -f *.png total.json debug_*.html debug_*.png
