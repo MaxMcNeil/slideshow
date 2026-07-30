@@ -562,13 +562,27 @@ function extractCaption(rawInnerText, sourceLabel) {
 // falls back to localReword() below rather than being left without a title.
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3:8b';
-const OLLAMA_CALL_TIMEOUT_MS = 25000;
+// Regular per-card call timeout — generous but bounded, for once the model
+// is already loaded in RAM (see warmUpOllama below). An 8B model on a
+// CPU-only CI runner doing a short (~80 token) completion realistically
+// takes several seconds to tens of seconds; 25s was measured to be too
+// tight even for a WARM model under load, let alone the cold first call.
+const OLLAMA_CALL_TIMEOUT_MS = 60000;
+// The very first request to a given model forces Ollama to read the whole
+// ~5GB of weights off disk into RAM before generating a single token — on a
+// CPU-only runner that alone can take well over 25s. Doing this as a
+// dedicated, throwaway warm-up call (generous timeout, result discarded)
+// means the 45-80 real per-card calls that follow hit an already-loaded
+// model instead of each racing the cold-start clock — and if even the
+// warm-up times out, we know immediately to fall back for everything
+// instead of failing the same way 45 times over.
+const OLLAMA_WARMUP_TIMEOUT_MS = 150000;
 // Hard ceiling on time spent waiting on the AI rewrite across ALL cards —
 // a CPU-only CI runner doing 50-80 sequential 8B calls can otherwise turn a
 // 4-hourly job into an hours-long one. Once the budget is spent, remaining
 // cards just use the local fallback (they still get a real, reworded title —
 // just not the AI-generated one).
-const OLLAMA_TOTAL_BUDGET_MS = 20 * 60 * 1000; // 20 min
+const OLLAMA_TOTAL_BUDGET_MS = 30 * 60 * 1000; // 30 min
 
 async function checkOllamaAvailable() {
     const axios = require('axios');
@@ -576,6 +590,28 @@ async function checkOllamaAvailable() {
         await axios.get(`${OLLAMA_URL}/api/tags`, { timeout: 3000 });
         return true;
     } catch (e) {
+        return false;
+    }
+}
+
+// Forces the model into RAM with a trivial, throwaway generation before the
+// real loop starts. Returns false (→ fall back for every card, without
+// wasting the per-card timeout budget 45+ times over) if even this fails.
+async function warmUpOllama() {
+    const axios = require('axios');
+    try {
+        console.log(`  🔥 Préchauffage de ${OLLAMA_MODEL} (chargement du modèle en RAM)...`);
+        const startedAt = Date.now();
+        await axios.post(`${OLLAMA_URL}/api/generate`, {
+            model: OLLAMA_MODEL,
+            prompt: 'Réponds juste "ok".',
+            stream: false,
+            options: { num_predict: 5 }
+        }, { timeout: OLLAMA_WARMUP_TIMEOUT_MS });
+        console.log(`  🔥 Modèle chargé en ${Math.round((Date.now() - startedAt) / 1000)}s`);
+        return true;
+    } catch (e) {
+        console.warn(`  ⚠ Préchauffage de ${OLLAMA_MODEL} échoué (${e.message}) — repli local pour toutes les cartes`);
         return false;
     }
 }
@@ -604,11 +640,13 @@ async function rewriteHeadlineWithQwen(headline, category) {
 }
 
 async function buildTitles(captions) {
-    const available = await checkOllamaAvailable();
+    let available = await checkOllamaAvailable();
     if (!available) {
         console.warn(`  ⚠ Ollama injoignable sur ${OLLAMA_URL} — repli local (reformulation par mots) pour toutes les cartes`);
     } else {
-        console.log(`  🤖 Ollama disponible (${OLLAMA_MODEL}) — reformulation éditoriale en cours...`);
+        console.log(`  🤖 Ollama disponible (${OLLAMA_MODEL})`);
+        available = await warmUpOllama(); // downgrades to false if even the warm-up fails
+        if (available) console.log(`  🤖 Reformulation éditoriale en cours...`);
     }
 
     const startedAt = Date.now();
