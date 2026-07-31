@@ -602,9 +602,10 @@ async function warmUpOllama() {
     try {
         console.log(`  🔥 Préchauffage de ${OLLAMA_MODEL} (chargement du modèle en RAM)...`);
         const startedAt = Date.now();
-        await axios.post(`${OLLAMA_URL}/api/generate`, {
+        await axios.post(`${OLLAMA_URL}/api/chat`, {
             model: OLLAMA_MODEL,
-            prompt: 'Réponds juste "ok".',
+            messages: [{ role: 'user', content: 'Réponds juste "ok".' }],
+            think: false,
             stream: false,
             options: { num_predict: 5 }
         }, { timeout: OLLAMA_WARMUP_TIMEOUT_MS });
@@ -616,6 +617,14 @@ async function warmUpOllama() {
     }
 }
 
+// qwen3 is a "thinking" model: Ollama auto-enables reasoning for it unless
+// told otherwise, and on /api/generate that reasoning silently eats the
+// entire num_predict budget — the call succeeds (200 OK, no exception) but
+// `response` comes back empty, with the actual output stuck in a `thinking`
+// trace we never asked for. /api/chat with `think: false` as a TOP-LEVEL
+// field (not inside `options` — Ollama ignores it there) is the documented
+// way to get a direct answer instead. This was the reason every single card
+// silently fell back to the local reword despite Ollama running fine.
 async function rewriteHeadlineWithQwen(headline, category) {
     const axios = require('axios');
     const prompt =
@@ -627,14 +636,15 @@ async function rewriteHeadlineWithQwen(headline, category) {
         `Catégorie : ${category || 'Actualité'}\n` +
         `Titre original : ${headline}`;
 
-    const res = await axios.post(`${OLLAMA_URL}/api/generate`, {
+    const res = await axios.post(`${OLLAMA_URL}/api/chat`, {
         model: OLLAMA_MODEL,
-        prompt,
+        messages: [{ role: 'user', content: prompt }],
+        think: false,
         stream: false,
-        options: { temperature: 0.4, num_predict: 80 }
+        options: { temperature: 0.4, num_predict: 100 }
     }, { timeout: OLLAMA_CALL_TIMEOUT_MS });
 
-    let text = ((res.data && res.data.response) || '').trim();
+    let text = ((res.data && res.data.message && res.data.message.content) || '').trim();
     text = text.replace(/^[«"']+|[»"']+$/g, '').replace(/\s+/g, ' ').trim();
     return text || null;
 }
@@ -660,7 +670,15 @@ async function buildTitles(captions) {
         if (available && budgetLeft > 0) {
             try {
                 title = await rewriteHeadlineWithQwen(c.headline, c.category);
-                if (title) aiOk++; else aiFailed++;
+                if (title) {
+                    aiOk++;
+                } else {
+                    aiFailed++;
+                    // No exception, just an unusable/empty result — log it
+                    // too (not only the catch below), or this class of
+                    // failure stays invisible in the CI log, same as before.
+                    console.warn(`  ⚠ Qwen: réponse vide/inexploitable ("${c.headline.slice(0, 40)}...")`);
+                }
             } catch (e) {
                 aiFailed++;
                 console.warn(`  ⚠ Qwen: échec reformulation ("${c.headline.slice(0, 40)}...") : ${e.message}`);
