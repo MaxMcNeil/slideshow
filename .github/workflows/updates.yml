@@ -3,6 +3,14 @@ on:
   schedule:
     - cron: '0 */4 * * *'
   workflow_dispatch:
+# A scheduled run and a manual workflow_dispatch can overlap — both checkout
+# the same main HEAD, and whichever finishes (this run takes ~15-40 min)
+# second gets its push rejected as a non-fast-forward. Queuing runs instead
+# of racing them removes the cause entirely, rather than only handling the
+# rejected push after the fact (still done below, as a second layer).
+concurrency:
+  group: capture-news
+  cancel-in-progress: false
 jobs:
   capture:
     runs-on: ubuntu-latest
@@ -58,9 +66,21 @@ jobs:
       - run: npx playwright install chromium --with-deps
       - run: rm -f *.png total.json debug_*.html debug_*.png
       - run: node capture.js
-      - run: |
+      - name: Commit and push
+        # Second layer of defense: with concurrency above this shouldn't be
+        # needed, but if it ever is (a run queued behind a slow one, a
+        # manual retry...), replay our already-generated working tree as a
+        # fresh commit on top of the current remote HEAD instead of letting
+        # a stale local history reject the push. Safe here specifically
+        # because every file we touch is fully regenerated each run, not
+        # incrementally edited — there's nothing meaningful to merge.
+        run: |
           git config user.name "bot"
           git config user.email "bot@github.com"
           git add -A
           git commit -m "Update cards" || echo "No changes"
-          git push
+          git fetch origin main
+          git reset --soft origin/main
+          git add -A
+          git commit -m "Update cards" || echo "No changes"
+          git push origin HEAD:main
