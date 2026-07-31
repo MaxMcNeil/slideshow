@@ -670,7 +670,12 @@ async function buildTitles(captions) {
         }
 
         c.title = title || localReword(c.headline, c.category);
-        if (!c.summary) c.summary = c.title;
+        // No forced c.summary = c.title fallback here: index.html already
+        // skips the summary slide entirely when meta.summary is empty
+        // (see buildPlaylist) — showing the title twice, once as the
+        // headline and once as an identical "summary", was the actual bug.
+        // A card with only a real fetched summary gets the extra slide;
+        // one without just shows its image for longer instead.
         delete c.headline;
         // category kept (not deleted): used as the kicker tag on the
         // generated card image (see generateCardImages / card-template.js).
@@ -733,6 +738,13 @@ async function fetchRealSummaries(captions) {
                     }
                 });
                 const real = extractRealSummaryFromHtml(res.data);
+                const realTitle = extractRealTitleFromHtml(res.data);
+                // The teaser headline scraped from the listing page is
+                // often itself truncated by the source site ("...DE…") —
+                // the article page's own <title>/og:title is the full,
+                // untruncated headline, so it replaces the teaser one here,
+                // before buildTitles() uses it as the Qwen rewrite source.
+                if (realTitle) c.headline = realTitle;
                 if (real) {
                     c.summary = real;
                     c.hasRealSummary = true;
@@ -750,6 +762,34 @@ async function fetchRealSummaries(captions) {
     console.log(`  📖 Lecture de ${targets.length} article(s) source pour un résumé réel...`);
     await Promise.all(Array.from({ length: Math.min(CONCURRENCY, targets.length) }, worker));
     console.log(`  📖 Résumés réels : ${ok} récupérés, ${failed} indisponibles (repli sur titre)`);
+}
+
+// Pulls the FULL headline from the article's own page — og:title, then
+// <h1>, then <title> — as opposed to the teaser headline scraped from the
+// listing/grid page, which several sources (CNews in particular) truncate
+// themselves with a trailing "…". Article pages don't have that constraint,
+// so this is normally the real, complete headline.
+function extractRealTitleFromHtml(html) {
+    const cheerio = require('cheerio');
+    const $ = cheerio.load(html || '');
+
+    let title =
+        $('meta[property="og:title"]').attr('content') ||
+        $('h1').first().text() ||
+        $('title').text() ||
+        '';
+    title = (title || '').replace(/\s+/g, ' ').trim();
+    if (!title) return null;
+
+    // <title> tags usually carry a " - SiteName" / " | SiteName" suffix
+    // that isn't part of the actual headline.
+    title = title.replace(/\s*[-|–]\s*(CNews|France ?[Ii]nfo|francetvinfo|Le Canard enchaîné)\s*$/i, '').trim();
+
+    // If even this is itself cut ("…"/"..."), it's no better than what we
+    // already had — not worth replacing the teaser headline with.
+    if (/(\.\.\.|…)\s*$/.test(title)) return null;
+
+    return title.length >= 15 ? title : null;
 }
 
 function extractRealSummaryFromHtml(html) {
