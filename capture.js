@@ -641,12 +641,32 @@ async function rewriteHeadlineWithQwen(headline, category) {
         messages: [{ role: 'user', content: prompt }],
         think: false,
         stream: false,
-        options: { temperature: 0.4, num_predict: 100 }
+        // Generous headroom: even with think:false honoured, a still-active
+        // reasoning trace (a prior run showed 0/N successes despite this
+        // flag) should still leave room for the real answer afterwards,
+        // instead of the whole budget being spent before any of it appears.
+        options: { temperature: 0.4, num_predict: 300 }
     }, { timeout: OLLAMA_CALL_TIMEOUT_MS });
 
-    let text = ((res.data && res.data.message && res.data.message.content) || '').trim();
+    const message = res.data && res.data.message;
+    let text = ((message && message.content) || '').trim();
+
+    // Defense in depth: if a <think>...</think> trace leaked into content
+    // despite think:false (or the model wrote one inline instead of using
+    // the dedicated `thinking` field), strip it rather than surface it or
+    // treat the card as failed.
+    text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
     text = text.replace(/^[«"']+|[»"']+$/g, '').replace(/\s+/g, ' ').trim();
-    return text || null;
+
+    if (!text) {
+        // Concrete diagnostic instead of a silent empty result — if this
+        // still happens, the next run's log says exactly what came back
+        // instead of leaving it a mystery again.
+        const rawLen = (message && message.content || '').length;
+        const thinkingLen = (message && message.thinking || '').length;
+        throw new Error(`réponse vide après nettoyage (content brut: ${rawLen} car., thinking: ${thinkingLen} car.)`);
+    }
+    return text;
 }
 
 async function buildTitles(captions) {
@@ -713,7 +733,13 @@ function localReword(headline, category) {
     while (words.length > 4 && fillers.has(words[0].toLowerCase())) words.shift();
 
     let core = words.join(' ');
-    if (core.length > 90) core = truncateCleanly(core, 90);
+    // 90 chars made sense when `headline` was already a short on-page
+    // teaser being reworded — now that extractRealTitleFromHtml() feeds
+    // this a real, full article headline, that cap was cutting normal
+    // titles mid-sentence on almost every card. The generated card
+    // (card-template.js) clamps to 6 lines and handles overflow itself via
+    // CSS, so this only needs to guard against genuinely extreme lengths.
+    if (core.length > 200) core = truncateCleanly(core, 200);
 
     const tag = category && category.length > 0 && category.length <= 24 ? category : 'À la une';
     return `${tag} : ${core}`;
